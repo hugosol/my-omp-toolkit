@@ -100,12 +100,17 @@ export default function readonlyMode(pi: ExtensionAPI) {
       const notifyLabel = state.scopeOverride.includes("all") ? "all"
         : state.scopeOverride.length > 0 ? state.scopeOverride.join(", ")
         : "chat";
-      ctx.ui.notify(
-        state.enabled
-          ? `Read-only mode ON (${notifyLabel})`
-          : "Read-only mode OFF",
-        state.enabled ? "warning" : "info",
-      );
+      const color = !state.enabled
+        ? "\x1b[34m"
+        : state.scopeOverride.length > 0
+          ? "\x1b[32m"
+          : "\x1b[38;5;214m";
+      const label = !state.enabled
+        ? "Build mode on"
+        : state.scopeOverride.length > 0
+          ? `Explore mode on, scope: ${notifyLabel}`
+          : "Chat mode on";
+      ctx.ui.notify(`${color}${label}\x1b[0m`, "info");
     },
   });
 
