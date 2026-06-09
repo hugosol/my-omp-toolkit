@@ -1,9 +1,9 @@
 /**
  * DeepSeek Cost Tracker — Session-level token usage and cost display.
  *
- * Shows cumulative cost in the status bar with an inline progress bar
- * tracking context usage against a configurable budget (default 250K).
- * Also appends per-turn cost entries to the conversation.
+ * Shows cumulative and per-turn cost in the status bar with an inline
+ * progress bar tracking context usage against a configurable budget
+ * (default 250K).
  *
  * Pricing (RMB per million tokens, deepseek-v4-pro):
  *   input (cache miss): ¥3     cacheRead (cache hit): ¥0.025     output: ¥6
@@ -32,10 +32,13 @@ const BAR_WIDTH = 20;
 // ============================================================================
 // Session state
 const STATUS_KEY = "z-deepseek-cost";
+const TURN_KEY = "z-deepseek-turn";
 
 let budget = DEFAULT_BUDGET;
 let previousTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 let lastContextTokens: number | null = null;
+
+let turnSummary: string | null = null;
 
 // ============================================================================
 // Helpers
@@ -61,10 +64,27 @@ function fmtCost(cost: number): string {
 	return cost >= 0.01 ? `¥${cost.toFixed(2)}` : `¥${cost.toFixed(4)}`;
 }
 
-function buildStatusLine(usage: { input: number; cacheRead: number; output: number }): string {
+const PAD_IN = 7;
+const PAD_OUT = 8;
+const PAD_COST = 10;
+
+function padTokens(n: number, width: number): string {
+	return fmtTokens(n).padStart(width);
+}
+
+function padCost(cost: number): string {
+	return fmtCost(cost).padStart(PAD_COST);
+}
+
+function buildStatusLine(usage: { input: number; cacheRead: number; output: number }, pad = false): string {
 	const totalIn = usage.input + usage.cacheRead;
 	const cost = rmbCost(usage.input, usage.cacheRead, usage.output);
-	return `Input: ${fmtTokens(usage.cacheRead)}/${fmtTokens(totalIn)}  Output: ${fmtTokens(usage.output)}  Cost: ${fmtCost(cost)}`;
+	const hitRate = totalIn > 0 ? Math.round((usage.cacheRead / totalIn) * 100) : 0;
+	if (pad) {
+		const pct = String(hitRate).padStart(3);
+		return `Input: ${padTokens(usage.cacheRead, PAD_IN)}/${padTokens(totalIn, PAD_IN)} (${pct}%)  Output: ${padTokens(usage.output, PAD_OUT)}  Cost: ${padCost(cost)}`;
+	}
+	return `Input: ${fmtTokens(usage.cacheRead)}/${fmtTokens(totalIn)} (${hitRate}%)  Output: ${fmtTokens(usage.output)}  Cost: ${fmtCost(cost)}`;
 }
 
 /**
@@ -89,6 +109,7 @@ function refresh(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
 	if (ctx.model?.id !== MODEL_ID) {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
+		ctx.ui.setStatus(TURN_KEY, undefined);
 		return;
 	}
 
@@ -97,13 +118,20 @@ function refresh(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	lastContextTokens = cu?.tokens ?? lastContextTokens;
 
 	const bar = buildBar(lastContextTokens, budget);
-	const line = `${bar}${bar ? "  " : ""}${buildStatusLine({
+	const totalLine = `\u{1F4CB} Total:  ${buildStatusLine({
 		input: stats.input,
 		cacheRead: stats.cacheRead,
 		output: stats.output,
-	})}`;
+	}, true)}`;
 
+	const line = bar ? `${bar}\n${totalLine}` : totalLine;
 	ctx.ui.setStatus(STATUS_KEY, line);
+
+	if (turnSummary) {
+		ctx.ui.setStatus(TURN_KEY, turnSummary);
+	} else {
+		ctx.ui.setStatus(TURN_KEY, undefined);
+	}
 }
 
 // ===========================================
@@ -154,6 +182,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 		const s = ctx.sessionManager.getUsageStatistics();
 		previousTotal = { input: s.input, output: s.output, cacheRead: s.cacheRead, cacheWrite: s.cacheWrite };
 		lastContextTokens = null;
+		turnSummary = null;
 		refresh(pi, ctx);
 	};
 
@@ -162,6 +191,12 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 	pi.on("session_switch", onInit);
 	pi.on("session_tree", onInit);
 
+
+	// Clear turn summary when agent starts a new run
+	pi.on("agent_start", (_event, ctx) => {
+		turnSummary = null;
+		if (ctx.hasUI) ctx.ui.setStatus(TURN_KEY, undefined);
+	});
 	// Agent end (fires once per user turn, after all tool loops)
 	pi.on("agent_end", async (_event, ctx) => {
 		if (ctx.model?.id !== MODEL_ID) return;
@@ -176,12 +211,9 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 		};
 
 		if (delta.input > 0 || delta.output > 0 || delta.cacheRead > 0) {
-			pi.sendMessage({
-				customType: "cost-turn",
-				content: `\u{1F4CA} This turn: ${buildStatusLine(delta)}`,
-				display: true,
-				attribution: "agent",
-			});
+			turnSummary = `\u{1F4CA} Turn:   ${buildStatusLine(delta, true)}`;
+		} else {
+			turnSummary = null;
 		}
 
 		previousTotal = cur;
