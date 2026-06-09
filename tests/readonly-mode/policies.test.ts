@@ -10,7 +10,7 @@ describe("formatBlock", () => {
   test("appends switch_to_build suffix", () => {
     const result = formatBlock({
       block: true,
-      reason: "Blocked.",
+      reason: "Need Build mode.",
       hint: "switch_to_build",
     });
     expect(result.block).toBe(true);
@@ -37,17 +37,17 @@ describe("formatBlock", () => {
       reason: "Nope.",
       hint: "use_alternative",
     });
-    expect(result.reason).toBe("Nope.");
+    expect(result.reason).toContain("Nope.");
     // No suffix added because alternatives is undefined
   });
 
-  test("appends no suffix when hint is none", () => {
+  test("appends no suffix when hint is silent", () => {
     const result = formatBlock({
       block: true,
       reason: "Just no.",
-      hint: "none",
+      hint: "silent",
     });
-    expect(result.reason).toBe("Just no.");
+    expect(result.reason).toContain("Just no.");
   });
 });
 

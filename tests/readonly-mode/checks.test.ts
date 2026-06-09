@@ -113,7 +113,7 @@ describe("checkBash", () => {
     const result = checkBash({ input: { command: "rm -rf /" } });
     expect(result).toBeDefined();
     expect(result!.reason).toContain("whitelist");
-    expect(result!.hint).toBe("none");
+    expect(result!.hint).toBe("silent");
   });
 
   test("blocks mkdir", () => {

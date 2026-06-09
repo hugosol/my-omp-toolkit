@@ -88,7 +88,7 @@ export const HAS_ALTERNATIVE_AGENTS = new Set([
 
 export type PolicyType = "allow" | "block" | "path_check" | "bash_check" | "lsp_check" | "browser_check" | "task_check";
 
-export type BlockHint = "switch_to_build" | "use_alternative" | "none";
+export type BlockHint = "switch_to_build" | "use_alternative" | "silent";
 
 export interface BlockResult {
   block: true;
@@ -113,12 +113,12 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
   resolve:    { type: "allow" },
 
   // Block — write / exec tools (Tier 1: no readonly alternative)
-  write:    { type: "block", reason: "Tool 'write' requires Build mode.", hint: "switch_to_build" },
-  edit:     { type: "block", reason: "Tool 'edit' requires Build mode.", hint: "switch_to_build" },
-  ast_edit: { type: "block", reason: "Tool 'ast_edit' requires Build mode.", hint: "switch_to_build" },
-  eval:     { type: "block", reason: "Tool 'eval' is blocked in read-only mode (can execute arbitrary code).", hint: "switch_to_build" },
+  write:    { type: "block", reason: "Tool 'write' modifies files.", hint: "switch_to_build" },
+  edit:     { type: "block", reason: "Tool 'edit' modifies files.", hint: "switch_to_build" },
+  ast_edit: { type: "block", reason: "Tool 'ast_edit' modifies files.", hint: "switch_to_build" },
+  eval:     { type: "block", reason: "Tool 'eval' can execute arbitrary code.", hint: "switch_to_build" },
   task:     { type: "task_check" },
-  debug:    { type: "block", reason: "Tool 'debug' is blocked in read-only mode (can modify program state).", hint: "switch_to_build" },
+  debug:    { type: "block", reason: "Tool 'debug' can modify program state.", hint: "switch_to_build" },
 
   // Per-call checks
   search:   { type: "path_check" },
@@ -131,7 +131,7 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
 
 export const DEFAULT_POLICY: ToolPolicy = {
   type: "block",
-  reason: "Unknown tool — blocked in read-only mode.",
+  reason: "Unknown tool — not available in read-only mode.",
   hint: "switch_to_build",
 };
 
@@ -139,9 +139,9 @@ export const DEFAULT_POLICY: ToolPolicy = {
 export function formatBlock(r: BlockResult): { block: true; reason: string } {
   let suffix = "";
   if (r.hint === "switch_to_build") {
-    suffix = "\n→ Use /readonly to switch to Build mode.";
+    suffix = "\n→ Ask the user to switch to Build mode with /readonly.";
   } else if (r.hint === "use_alternative" && r.alternatives?.length) {
     suffix = `\n→ Instead try: ${r.alternatives.join("; ")}.`;
   }
-  return { block: true, reason: r.reason + suffix };
+  return { block: true, reason: "Blocked. " + r.reason + suffix };
 }
