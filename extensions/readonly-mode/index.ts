@@ -173,9 +173,20 @@ function buildScopeGuide(scope: string[]): string {
 
 type PolicyType = "allow" | "block" | "path_check" | "bash_check" | "lsp_check" | "browser_check";
 
+type BlockHint = "switch_to_build" | "use_alternative" | "none";
+
+interface BlockResult {
+  block: true;
+  reason: string;
+  hint: BlockHint;
+  alternatives?: string[];
+}
+
 interface ToolPolicy {
   type: PolicyType;
   reason?: string;
+  hint?: BlockHint;
+  alternatives?: string[];
 }
 
 const TOOL_POLICIES: Record<string, ToolPolicy> = {
@@ -186,13 +197,13 @@ const TOOL_POLICIES: Record<string, ToolPolicy> = {
   read:       { type: "allow" },
   resolve:    { type: "allow" },
 
-  // Block with reason — write / exec tools
-  write:    { type: "block", reason: "Tool 'write' requires Build mode. Use /readonly to toggle." },
-  edit:     { type: "block", reason: "Tool 'edit' requires Build mode. Use /readonly to toggle." },
-  ast_edit: { type: "block", reason: "Tool 'ast_edit' requires Build mode. Use /readonly to toggle." },
-  eval:     { type: "block", reason: "Tool 'eval' is blocked in read-only mode (can execute arbitrary code)." },
-  task:     { type: "block", reason: "Tool 'task' is blocked in read-only mode (sub-agents can write files)." },
-  debug:    { type: "block", reason: "Tool 'debug' is blocked in read-only mode (can modify program state)." },
+  // Block — write / exec tools (Tier 1: no readonly alternative)
+  write:    { type: "block", reason: "Tool 'write' requires Build mode.", hint: "switch_to_build" },
+  edit:     { type: "block", reason: "Tool 'edit' requires Build mode.", hint: "switch_to_build" },
+  ast_edit: { type: "block", reason: "Tool 'ast_edit' requires Build mode.", hint: "switch_to_build" },
+  eval:     { type: "block", reason: "Tool 'eval' is blocked in read-only mode (can execute arbitrary code).", hint: "switch_to_build" },
+  task:     { type: "block", reason: "Tool 'task' is blocked in read-only mode (sub-agents can write files).", hint: "switch_to_build" },
+  debug:    { type: "block", reason: "Tool 'debug' is blocked in read-only mode (can modify program state).", hint: "switch_to_build" },
 
   // Per-call checks
   search:   { type: "path_check" },
@@ -205,39 +216,57 @@ const TOOL_POLICIES: Record<string, ToolPolicy> = {
 
 const DEFAULT_POLICY: ToolPolicy = {
   type: "block",
-  reason: "Unknown tool — blocked in read-only mode. Use /readonly to toggle to Build mode.",
+  reason: "Unknown tool — blocked in read-only mode.",
+  hint: "switch_to_build",
 };
+
+/** Format a BlockResult into the final { block, reason } shape the framework expects. */
+function formatBlock(r: BlockResult): { block: true; reason: string } {
+  let suffix = "";
+  if (r.hint === "switch_to_build") {
+    suffix = "\n→ Use /readonly to switch to Build mode.";
+  } else if (r.hint === "use_alternative" && r.alternatives?.length) {
+    suffix = `\n→ Instead try: ${r.alternatives.join("; ")}.`;
+  }
+  return { block: true, reason: r.reason + suffix };
+}
 
 // ============================================================
 // Tool check functions
 // ============================================================
 
-function checkBash(event: { input: unknown }): { block: true; reason: string } | undefined {
+function checkBash(event: { input: unknown }): BlockResult | undefined {
   const input = event.input as { command?: string };
   const command = (input.command ?? "").trim();
-  if (!command) return { block: true, reason: "Empty bash command." };
+  if (!command) return { block: true, reason: "Empty bash command.", hint: "none" };
 
-  // 1. Block command chaining
+  // 1. Block command chaining → suggest running one at a time
   if (BASH_BLOCKED_CHAIN.test(command)) {
     return {
       block: true,
-      reason: "Command chaining (&&, ||, ;, `, $()) is blocked in read-only mode. Run one read-only command at a time.",
+      reason: "Command chaining (&&, ||, ;, \`, $()) is blocked in read-only mode.",
+      hint: "use_alternative",
+      alternatives: ["Run one read-only command at a time"],
     };
   }
 
-  // 2. Block output redirection
+  // 2. Block output redirection → suggest read tool
   if (BASH_BLOCKED_REDIRECT.test(command) || BASH_BLOCKED_TEE.test(command)) {
     return {
       block: true,
       reason: "Output redirection (>, >>, &>, | tee) is blocked in read-only mode.",
+      hint: "use_alternative",
+      alternatives: ["Use the read tool to view file content", "Pipe to stdout without redirecting"],
     };
   }
 
-  // 3. Block sed -i (in-place editing)
+  // 3. Block sed -i (in-place editing) → suggest sed without -i
   if (/^\s*sed\b/.test(command) && /\s-i\b/.test(command)) {
     return {
       block: true,
-      reason: "sed -i (in-place editing) is blocked in read-only mode. Use sed without -i for read-only filtering.",
+      reason: "sed -i (in-place editing) is blocked in read-only mode.",
+      hint: "use_alternative",
+      alternatives: ["Use sed without -i for read-only filtering"],
     };
   }
 
@@ -249,6 +278,7 @@ function checkBash(event: { input: unknown }): { block: true; reason: string } |
   return {
     block: true,
     reason: "Command not in read-only whitelist. Allowed: ls, cat, grep, rg, find, stat, awk, jq, sed, git log/diff/show, npm ls, cargo tree, pip list, node --version, etc.",
+    hint: "none",
   };
 }
 
@@ -256,7 +286,7 @@ function checkSearchPaths(
   event: { input: unknown },
   cwd: string,
   scopeOverride: string[],
-): { block: true; reason: string } | undefined {
+): BlockResult | undefined {
   const input = event.input as { paths?: string | string[] };
   const paths = !input.paths ? [] : Array.isArray(input.paths) ? input.paths : [input.paths];
 
@@ -272,37 +302,45 @@ function checkSearchPaths(
 
   return {
     block: true,
-    reason: `Search path(s) outside allowed scope: ${outOfScope.join(", ")}.\n\nAllowed search paths:\n${buildScopeGuide(scope)}\n\nUse /readonly <path> to expand scope, or retry with paths scoped to the above directories.`,
+    reason: `Search path(s) outside allowed scope: ${outOfScope.join(", ")}.\n\nAllowed search paths:\n${buildScopeGuide(scope)}`,
+    hint: "use_alternative",
+    alternatives: ["Retry with paths scoped to the above directories", "Use /readonly <path> to expand scope"],
   };
 }
 
-function checkLsp(event: { input: unknown }): { block: true; reason: string } | undefined {
+function checkLsp(event: { input: unknown }): BlockResult | undefined {
   const input = event.input as { action?: string; apply?: boolean };
 
   if (input.action === "rename" || input.action === "rename_file") {
     return {
       block: true,
-      reason: `LSP '${input.action}' is blocked in read-only mode (modifies files). Use definition, hover, references, symbols, or diagnostics for code exploration.`,
+      reason: `LSP '${input.action}' is blocked in read-only mode (modifies files).`,
+      hint: "use_alternative",
+      alternatives: ["lsp definition", "lsp hover", "lsp references", "lsp symbols", "lsp diagnostics"],
     };
   }
 
   if (input.action === "code_actions" && input.apply) {
     return {
       block: true,
-      reason: "LSP code_actions with apply is blocked in read-only mode (may modify files). Use code_actions without apply to list available fixes.",
+      reason: "LSP code_actions with apply is blocked in read-only mode (may modify files).",
+      hint: "use_alternative",
+      alternatives: ["Use lsp code_actions without apply to list available fixes"],
     };
   }
 
   return undefined;
 }
 
-function checkBrowser(event: { input: unknown }): { block: true; reason: string } | undefined {
+function checkBrowser(event: { input: unknown }): BlockResult | undefined {
   const input = event.input as { action?: string };
 
   if (input.action === "run") {
     return {
       block: true,
-      reason: "Browser 'run' is blocked in read-only mode (can interact with pages). Use browser 'open' to load pages and 'close' to release tabs.",
+      reason: "Browser 'run' is blocked in read-only mode (can interact with pages).",
+      hint: "use_alternative",
+      alternatives: ["browser open", "browser close"],
     };
   }
 
@@ -480,24 +518,39 @@ export default function readonlyMode(pi: ExtensionAPI) {
 
     const policy = TOOL_POLICIES[event.toolName] ?? DEFAULT_POLICY;
 
+    let raw: BlockResult | undefined;
+
     switch (policy.type) {
       case "allow":
         return;
 
       case "block":
-        return { block: true, reason: policy.reason };
+        raw = {
+          block: true,
+          reason: policy.reason ?? "",
+          hint: policy.hint ?? "switch_to_build",
+          alternatives: policy.alternatives,
+        };
+        break;
 
       case "bash_check":
-        return checkBash(event);
+        raw = checkBash(event);
+        break;
 
       case "path_check":
-        return checkSearchPaths(event, ctx.cwd, state.scopeOverride);
+        raw = checkSearchPaths(event, ctx.cwd, state.scopeOverride);
+        break;
 
       case "lsp_check":
-        return checkLsp(event);
+        raw = checkLsp(event);
+        break;
 
       case "browser_check":
-        return checkBrowser(event);
+        raw = checkBrowser(event);
+        break;
     }
+
+    if (!raw) return;
+    return formatBlock(raw);
   });
 }
