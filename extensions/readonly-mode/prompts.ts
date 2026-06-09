@@ -24,6 +24,15 @@ export const CLEANUP_HISTORY = false;
 export const BUILD_SYSTEM_PROMPT = `[BUILD MODE ACTIVE]
 You are in Build mode with full access. No tool restrictions apply.`;
 
+// Short transition messages injected into conversation history on mode switch.
+// These mirror BUILD_SYSTEM_PROMPT in format — terse, attention-grabbing,
+// not repeating the full system prompt.
+export const CHAT_TRANSITION_PROMPT = `[CHAT MODE ACTIVE]
+You have switched to Chat mode. Write and execute tools are now blocked.`;
+
+export const EXPLORE_TRANSITION_PROMPT = `[EXPLORE MODE ACTIVE]
+You have switched to Explore mode. Write and execute tools are now blocked.`;
+
 export const CHAT_SYSTEM_PROMPT = `[CHAT MODE ACTIVE]
 You are in Chat mode (read-only, workspace-scoped). You can read, search, and analyze the codebase within the workspace, but write or execute operations are blocked by the system.
 

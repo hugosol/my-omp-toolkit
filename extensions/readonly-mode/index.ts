@@ -12,6 +12,8 @@ import {
   CLEANUP_HISTORY,
   BUILD_SYSTEM_PROMPT,
   CHAT_SYSTEM_PROMPT,
+  CHAT_TRANSITION_PROMPT,
+  EXPLORE_TRANSITION_PROMPT,
   exploreSystemPrompt,
 } from "./prompts";
 
@@ -137,6 +139,7 @@ export default function readonlyMode(pi: ExtensionAPI) {
 
     // Decide whether to inject a message
     let shouldInject = false;
+    let injectContent = content;
     if (location === "message_every_turn") {
       shouldInject = true;
     } else if (location === "message_on_transition") {
@@ -145,6 +148,15 @@ export default function readonlyMode(pi: ExtensionAPI) {
       } else if (REINJECT_INTERVAL > 0 && state.turnsSinceTransition >= REINJECT_INTERVAL) {
         shouldInject = true;
       }
+    }
+    // When switching to readonly mode, also inject a brief transition
+    // message into conversation history so the model explicitly sees
+    // the mode change (mirrors BUILD_PROMPT_LOCATION="message_on_transition").
+    if (!shouldInject && modeChanged && state.enabled) {
+      shouldInject = true;
+      injectContent = state.scopeOverride.length > 0
+        ? EXPLORE_TRANSITION_PROMPT
+        : CHAT_TRANSITION_PROMPT;
     }
 
     // Update tracking
@@ -163,7 +175,7 @@ export default function readonlyMode(pi: ExtensionAPI) {
       result.systemPrompt = [...event.systemPrompt, content];
     }
     if (shouldInject) {
-      result.message = { customType, content, display: false };
+      result.message = { customType, content: injectContent, display: false };
     }
     return result;
   });
