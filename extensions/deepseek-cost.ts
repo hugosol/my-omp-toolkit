@@ -1,7 +1,7 @@
 /**
  * DeepSeek Cost Tracker — Session-level token usage and cost display.
  *
- * Shows cumulative and per-turn cost in the status bar with an inline
+ * Shows cumulative and per-turn cost in the widget area with an inline
  * progress bar tracking context usage against a configurable budget
  * (default 250K).
  *
@@ -31,8 +31,8 @@ const BAR_WIDTH = 20;
 
 // ============================================================================
 // Session state
-const STATUS_KEY = "z-deepseek-cost";
-const TURN_KEY = "z-deepseek-turn";
+const WIDGET_KEY = "z-deepseek-cost";
+
 
 let budget = DEFAULT_BUDGET;
 let previousTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -108,8 +108,7 @@ function refresh(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	if (!ctx.hasUI) return;
 
 	if (ctx.model?.id !== MODEL_ID) {
-		ctx.ui.setStatus(STATUS_KEY, undefined);
-		ctx.ui.setStatus(TURN_KEY, undefined);
+		ctx.ui.setWidget(WIDGET_KEY, undefined);
 		return;
 	}
 
@@ -117,21 +116,27 @@ function refresh(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	const cu = ctx.getContextUsage();
 	lastContextTokens = cu?.tokens ?? lastContextTokens;
 
+	const lines: string[] = [];
+
+	// Line 1: colored progress bar
 	const bar = buildBar(lastContextTokens, budget);
-	const totalLine = `\u{1F4CB} Total:  ${buildStatusLine({
+	if (bar && lastContextTokens !== null) {
+		lines.push(colorBar(bar, lastContextTokens, budget, ctx.ui.theme));
+	}
+
+	// Line 2: total stats
+	lines.push(`\u{1F4CB} Total:  ${buildStatusLine({
 		input: stats.input,
 		cacheRead: stats.cacheRead,
 		output: stats.output,
-	}, true)}`;
+	}, true)}`);
 
-	const line = bar ? `${bar}\n${totalLine}` : totalLine;
-	ctx.ui.setStatus(STATUS_KEY, line);
-
+	// Line 3: turn stats (if available)
 	if (turnSummary) {
-		ctx.ui.setStatus(TURN_KEY, turnSummary);
-	} else {
-		ctx.ui.setStatus(TURN_KEY, undefined);
+		lines.push(turnSummary);
 	}
+
+	ctx.ui.setWidget(WIDGET_KEY, lines);
 }
 
 // ===========================================
@@ -195,7 +200,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 	// Clear turn summary when agent starts a new run
 	pi.on("agent_start", (_event, ctx) => {
 		turnSummary = null;
-		if (ctx.hasUI) ctx.ui.setStatus(TURN_KEY, undefined);
+		refresh(pi, ctx);
 	});
 	// Agent end (fires once per user turn, after all tool loops)
 	pi.on("agent_end", async (_event, ctx) => {
