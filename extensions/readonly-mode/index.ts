@@ -135,15 +135,17 @@ function resolvePath(p: string, cwd: string): string {
 }
 
 /** Compute the current set of allowed scope directories. */
-function getAllowedScope(cwd: string, scopeOverride: string | null): string[] {
+function getAllowedScope(cwd: string, scopeOverride: string[]): string[] {
   const scope: string[] = [];
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
   if (homeDir) {
     scope.push(path.resolve(homeDir, ".omp", "agent"));
   }
   scope.push(cwd);
-  if (scopeOverride && scopeOverride !== "all") {
-    scope.push(resolvePath(scopeOverride, cwd));
+  if (!scopeOverride.includes("all")) {
+    for (const p of scopeOverride) {
+      scope.push(resolvePath(p, cwd));
+    }
   }
   return scope;
 }
@@ -253,7 +255,7 @@ function checkBash(event: { input: unknown }): { block: true; reason: string } |
 function checkSearchPaths(
   event: { input: unknown },
   cwd: string,
-  scopeOverride: string | null,
+  scopeOverride: string[],
 ): { block: true; reason: string } | undefined {
   const input = event.input as { paths?: string | string[] };
   const paths = !input.paths ? [] : Array.isArray(input.paths) ? input.paths : [input.paths];
@@ -262,7 +264,7 @@ function checkSearchPaths(
   if (paths.length === 0) return undefined;
 
   // "all" scope → all paths allowed
-  if (scopeOverride === "all") return undefined;
+  if (scopeOverride.includes("all")) return undefined;
 
   const scope = getAllowedScope(cwd, scopeOverride);
   const outOfScope = paths.filter((p) => !isPathInScope(p, scope, cwd));
@@ -312,7 +314,7 @@ function checkBrowser(event: { input: unknown }): { block: true; reason: string 
 // ============================================================
 
 export default function readonlyMode(pi: ExtensionAPI) {
-  const state = { enabled: false, scopeOverride: null as string | null, previousEnabled: undefined as boolean | undefined, previousScopeOverride: undefined as string | null | undefined, turnsSinceTransition: 0 };
+  const state = { enabled: false, scopeOverride: [] as string[], previousEnabled: undefined as boolean | undefined, previousScopeOverride: undefined as string[] | undefined, turnsSinceTransition: 0 };
 
   function updateState(ctx: ExtensionContext, patch: Partial<typeof state>): void {
     Object.assign(state, patch);
@@ -321,15 +323,15 @@ export default function readonlyMode(pi: ExtensionAPI) {
 
   pi.setLabel("Read-only Mode");
 
-  function setWidget(ctx: ExtensionContext, on: boolean, override: string | null): void {
+  function setWidget(ctx: ExtensionContext, on: boolean, override: string[]): void {
     let label: string;
     let color: string;
 
     if (!on) {
       label = "Build";
       color = "\x1b[34m";
-    } else if (override) {
-      const display = override === "all" ? "all" : override;
+    } else if (override.length > 0) {
+      const display = override.includes("all") ? "all" : override.join(", ");
       label = `Explore: ${display}`;
       color = "\x1b[32m";
     } else {
@@ -338,35 +340,59 @@ export default function readonlyMode(pi: ExtensionAPI) {
     }
 
     ctx.ui.setWidget("readonly-mode", [
-      `${color}┌${"─".repeat(label.length)}┐\x1b[0m`,
+      `${color}┌${"\u2500".repeat(label.length)}┐\x1b[0m`,
       `${color}│${label}│\x1b[0m`,
-      `${color}└${"─".repeat(label.length)}┘\x1b[0m`,
+      `${color}└${"\u2500".repeat(label.length)}┘\x1b[0m`,
     ]);
   }
 
   // Default state: Build (read-write)
   pi.on("session_start", async (_event, ctx) => {
-    updateState(ctx, { enabled: false, scopeOverride: null });
+    updateState(ctx, { enabled: false, scopeOverride: [] });
   });
 
-  // Slash command: /readonly, /readonly all, /readonly <path>
+  // Slash command: /readonly, /readonly all, /readonly <path...>, /readonly add <path>, /readonly remove <path>, /readonly clear
   pi.registerCommand("readonly", {
-    description: "Toggle read-only mode. /readonly all: allow all paths. /readonly <path>: also allow <path>",
+    description: "Toggle read-only mode. /readonly all: allow all paths. /readonly <paths...>: allow specific paths. /readonly add <p> / remove <p> / clear.",
     handler: async (args, ctx) => {
       const arg = args.trim();
       const argLower = arg.toLowerCase();
 
       if (!arg) {
-        updateState(ctx, { enabled: !state.enabled, scopeOverride: null });
+        // Toggle: preserve overrides when turning back on
+        updateState(ctx, { enabled: !state.enabled });
       } else if (argLower === "all") {
-        updateState(ctx, { enabled: true, scopeOverride: "all" });
+        updateState(ctx, { enabled: true, scopeOverride: ["all"] });
+      } else if (argLower === "clear") {
+        updateState(ctx, { enabled: true, scopeOverride: [] });
+      } else if (argLower.startsWith("add ")) {
+        const toAdd = arg.slice(4).trim();
+        if (!toAdd) {
+          ctx.ui.notify("Usage: /readonly add <path>", "error");
+          return;
+        }
+        const updated = [...state.scopeOverride.filter(p => p !== "all"), toAdd];
+        updateState(ctx, { enabled: true, scopeOverride: updated });
+      } else if (argLower.startsWith("remove ")) {
+        const toRemove = arg.slice(7).trim();
+        if (!toRemove) {
+          ctx.ui.notify("Usage: /readonly remove <path>", "error");
+          return;
+        }
+        const updated = state.scopeOverride.filter(p => p !== "all" && p !== toRemove);
+        updateState(ctx, { enabled: true, scopeOverride: updated });
       } else {
-        updateState(ctx, { enabled: true, scopeOverride: arg });
+        // Space-separated paths: replace existing overrides
+        const paths = arg.split(/\s+/).filter(p => p.length > 0);
+        updateState(ctx, { enabled: true, scopeOverride: paths });
       }
 
+      const notifyLabel = state.scopeOverride.includes("all") ? "all"
+        : state.scopeOverride.length > 0 ? state.scopeOverride.join(", ")
+        : "chat";
       ctx.ui.notify(
         state.enabled
-          ? `Read-only mode ON${state.scopeOverride ? ` (${state.scopeOverride})` : ""}`
+          ? `Read-only mode ON (${notifyLabel})`
           : "Read-only mode OFF",
         state.enabled ? "warning" : "info",
       );
@@ -375,8 +401,9 @@ export default function readonlyMode(pi: ExtensionAPI) {
 
   // Inject mode declaration per configuration
   pi.on("before_agent_start", async (event, ctx) => {
-    const modeChanged = state.previousEnabled !== state.enabled
-      || state.previousScopeOverride !== state.scopeOverride;
+    const prevKey = (state.previousScopeOverride ?? []).join("|");
+    const currKey = state.scopeOverride.join("|");
+    const modeChanged = state.previousEnabled !== state.enabled || prevKey !== currKey;
 
     const location = state.enabled ? READONLY_PROMPT_LOCATION : BUILD_PROMPT_LOCATION;
 
@@ -385,14 +412,13 @@ export default function readonlyMode(pi: ExtensionAPI) {
     let customType: string;
     if (!state.enabled) {
       content = BUILD_SYSTEM_PROMPT;
-      customType = "build-mode-context";
     } else {
       const scope = getAllowedScope(ctx.cwd, state.scopeOverride);
       const paths = `\nAllowed search paths:\n${buildScopeGuide(scope)}`;
-      if (state.scopeOverride) {
-        const desc = state.scopeOverride === "all"
+      if (state.scopeOverride.length > 0) {
+        const desc = state.scopeOverride.includes("all")
           ? "all directories (including workspace and ~/.omp/agent)"
-          : `workspace + ${state.scopeOverride} (and ~/.omp/agent)`;
+          : `workspace + ${state.scopeOverride.join(", ")} (and ~/.omp/agent)`;
         content = exploreSystemPrompt(desc) + paths;
         customType = "explore-mode-context";
       } else {
@@ -420,7 +446,7 @@ export default function readonlyMode(pi: ExtensionAPI) {
       state.turnsSinceTransition++;
     }
     state.previousEnabled = state.enabled;
-    state.previousScopeOverride = state.scopeOverride;
+    state.previousScopeOverride = [...state.scopeOverride];
 
     if (!shouldInject && location !== "system_prompt") return;
 
@@ -439,7 +465,7 @@ export default function readonlyMode(pi: ExtensionAPI) {
     const MODE_TYPES = ["build-mode-context", "chat-mode-context", "explore-mode-context"];
     pi.on("context", async event => {
       const current = !state.enabled ? "build-mode-context"
-        : state.scopeOverride ? "explore-mode-context" : "chat-mode-context";
+        : state.scopeOverride.length > 0 ? "explore-mode-context" : "chat-mode-context";
       return {
         messages: event.messages.filter(m =>
           m.role !== "custom" || !MODE_TYPES.includes(m.customType) || m.customType === current,
