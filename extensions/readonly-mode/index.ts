@@ -67,6 +67,25 @@ const BASH_BLOCKED_REDIRECT = /[>&]+\s*(?:>>?)/;
 const BASH_BLOCKED_TEE = /\|\s*tee\b/;
 
 // ============================================================
+// Task agent whitelist — agents allowed in read-only mode
+// ============================================================
+
+/** Agent names whose declared tools are all read-only or whose
+ *  prompt constrains them to read-only project operations. */
+const READONLY_TASK_AGENTS = new Set([
+  "explore",
+  "librarian",
+  "plan",
+  "reviewer",
+]);
+
+/** Agents that have a read-only alternative (explore). */
+const HAS_ALTERNATIVE_AGENTS = new Set([
+  "task",
+  "quick_task",
+]);
+
+// ============================================================
 // Injection strategy configuration
 // ============================================================
 // Where to inject mode prompts. Each mode (Build / Chat+Explore) configured
@@ -102,8 +121,8 @@ Before calling any tool, you MUST present a clear plan stating:
 
 Do not call tools silently or without first explaining your intent. If the user's request requires creating or modifying files, explain why it cannot be done in chat mode and suggest switching to Build mode.
 
-Allowed tools: read, web_search, ask, todo, resolve, browser (open/close), lsp (read-only actions).
-Blocked tools: write, edit, ast_edit, eval, task, debug, browser (run), lsp (rename/code_actions:apply).`;
+Allowed tools: read, web_search, ask, todo, resolve, task (read-only agents: explore, librarian, plan, reviewer), browser (open/close), lsp (read-only actions).
+Blocked tools: write, edit, ast_edit, eval, debug, browser (run), lsp (rename/code_actions:apply).`;
 
 function exploreSystemPrompt(scopeDescription: string): string {
   return `[EXPLORE MODE ACTIVE]
@@ -116,8 +135,8 @@ Before calling any tool, you MUST present a clear plan stating:
 
 Do not call tools silently or without first explaining your intent. If the user's request requires creating or modifying files, explain why it cannot be done in explore mode and suggest switching to Build mode.
 
-Allowed tools: read, web_search, ask, todo, resolve, browser (open/close), lsp (read-only actions).
-Blocked tools: write, edit, ast_edit, eval, task, debug, browser (run), lsp (rename/code_actions:apply).`;
+Allowed tools: read, web_search, ask, todo, resolve, task (read-only agents: explore, librarian, plan, reviewer), browser (open/close), lsp (read-only actions).
+Blocked tools: write, edit, ast_edit, eval, debug, browser (run), lsp (rename/code_actions:apply).`;
 }
 
 // ============================================================
@@ -171,7 +190,7 @@ function buildScopeGuide(scope: string[]): string {
 // Tool policies (declarative)
 // ============================================================
 
-type PolicyType = "allow" | "block" | "path_check" | "bash_check" | "lsp_check" | "browser_check";
+type PolicyType = "allow" | "block" | "path_check" | "bash_check" | "lsp_check" | "browser_check" | "task_check";
 
 type BlockHint = "switch_to_build" | "use_alternative" | "none";
 
@@ -202,7 +221,7 @@ const TOOL_POLICIES: Record<string, ToolPolicy> = {
   edit:     { type: "block", reason: "Tool 'edit' requires Build mode.", hint: "switch_to_build" },
   ast_edit: { type: "block", reason: "Tool 'ast_edit' requires Build mode.", hint: "switch_to_build" },
   eval:     { type: "block", reason: "Tool 'eval' is blocked in read-only mode (can execute arbitrary code).", hint: "switch_to_build" },
-  task:     { type: "block", reason: "Tool 'task' is blocked in read-only mode (sub-agents can write files).", hint: "switch_to_build" },
+  task:     { type: "task_check" },
   debug:    { type: "block", reason: "Tool 'debug' is blocked in read-only mode (can modify program state).", hint: "switch_to_build" },
 
   // Per-call checks
@@ -345,6 +364,42 @@ function checkBrowser(event: { input: unknown }): BlockResult | undefined {
   }
 
   return undefined;
+}
+
+function checkTask(event: { input: unknown }): BlockResult | undefined {
+  const input = event.input as { agent?: string; tasks?: unknown[] };
+  const agent = input.agent;
+
+  // No agent specified — block (shouldn't happen, but safe)
+  if (!agent) {
+    return {
+      block: true,
+      reason: "Tool 'task' is blocked in read-only mode (sub-agents can write files).",
+      hint: "switch_to_build",
+    };
+  }
+
+  // Read-only agents — allow
+  if (READONLY_TASK_AGENTS.has(agent)) {
+    return undefined;
+  }
+
+  // Agents with a read-only alternative
+  if (HAS_ALTERNATIVE_AGENTS.has(agent)) {
+    return {
+      block: true,
+      reason: `Tool 'task' with agent '${agent}' is blocked in read-only mode.`,
+      hint: "use_alternative",
+      alternatives: ["Use `explore` agent for code investigation", "Use read/search/find tools directly"],
+    };
+  }
+
+  // All other agents — no read-only alternative
+  return {
+    block: true,
+    reason: `Tool 'task' with agent '${agent}' is blocked in read-only mode.`,
+    hint: "switch_to_build",
+  };
 }
 
 // ============================================================
@@ -547,6 +602,10 @@ export default function readonlyMode(pi: ExtensionAPI) {
 
       case "browser_check":
         raw = checkBrowser(event);
+        break;
+
+      case "task_check":
+        raw = checkTask(event);
         break;
     }
 
