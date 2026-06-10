@@ -18,7 +18,7 @@ import { discoverSkills, type ExtensionAPI, type ExtensionCommandContext } from 
 
 let currentPhase: "idle" | "phase1" = "idle";
 let currentSlug: string | undefined;
-let replyCount = 0;
+let firstReplySent = false;
 
 // ============================================================================
 // Constants
@@ -98,21 +98,17 @@ export default function prdToCode(pi: ExtensionAPI): void {
 	pi.setLabel("PRD-to-Code");
 
 	pi.on("agent_end", async (_event, _ctx) => {
-		console.log("[prd-to-code] agent_end:", { phase: currentPhase, slug: currentSlug, replyCount });
-
 		if (currentPhase !== "phase1" || !currentSlug) return;
 
 		if (await hasIssueFiles(currentSlug)) {
-			console.log("[prd-to-code] issues found, transitioning to Phase 2");
 			currentPhase = "idle";
 			const slug = currentSlug;
 			currentSlug = undefined;
 			await startPhase2(pi, slug);
 		} else {
-			const msg = replyCount === 0 ? FIRST_REPLY : PUBLISH_REPLY;
-			console.log("[prd-to-code] no issues, sending:", msg);
+			const msg = firstReplySent ? PUBLISH_REPLY : FIRST_REPLY;
 			pi.sendUserMessage(msg, { deliverAs: "followUp" });
-			replyCount++;
+			firstReplySent = true;
 		}
 	});
 
@@ -148,7 +144,7 @@ export default function prdToCode(pi: ExtensionAPI): void {
 
 			currentPhase = "phase1";
 			currentSlug = slug;
-			replyCount = 0;
+			firstReplySent = false;
 			const success = await activateSkill(
 				pi,
 				"to-issues",
