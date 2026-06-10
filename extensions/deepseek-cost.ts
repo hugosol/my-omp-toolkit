@@ -39,7 +39,8 @@ let previousTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 let lastContextTokens: number | null = null;
 
 let turnSummary: string | null = null;
-
+let balanceStr: string | null = null;
+let detailMode = false;
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -47,7 +48,12 @@ let turnSummary: string | null = null;
 function fmtTokens(n: number): string {
 	if (n >= 100_000) {
 		const k = n / 1000;
-		return k >= 100 ? `${Math.round(k)}K` : `${k.toFixed(1)}K`;
+		const whole = Math.floor(k);
+		const frac = Math.round((k - whole) * 10);
+		const carry = frac >= 10 ? 1 : 0;
+		const adjusted = whole + carry;
+		const finalFrac = carry ? 0 : frac;
+		return `${adjusted.toLocaleString("en-US")}.${finalFrac}K`;
 	}
 	return n.toLocaleString("en-US");
 }
@@ -67,7 +73,7 @@ function fmtCost(cost: number): string {
 const PAD_IN = 7;
 const PAD_OUT = 8;
 const PAD_COST = 10;
-
+const PAD_SUM = 7;
 function padTokens(n: number, width: number): string {
 	return fmtTokens(n).padStart(width);
 }
@@ -76,15 +82,25 @@ function padCost(cost: number): string {
 	return fmtCost(cost).padStart(PAD_COST);
 }
 
+function padSum(sum: number): string {
+	return fmtTokens(sum).padStart(PAD_SUM);
+}
 function buildStatusLine(usage: { input: number; cacheRead: number; output: number }, pad = false): string {
 	const totalIn = usage.input + usage.cacheRead;
+	const sum = totalIn + usage.output;
 	const cost = rmbCost(usage.input, usage.cacheRead, usage.output);
 	const hitRate = totalIn > 0 ? Math.round((usage.cacheRead / totalIn) * 100) : 0;
 	if (pad) {
-		const pct = String(hitRate).padStart(3);
-		return `Input: ${padTokens(usage.cacheRead, PAD_IN)}/${padTokens(totalIn, PAD_IN)} (${pct}%)  Output: ${padTokens(usage.output, PAD_OUT)}  Cost: ${padCost(cost)}`;
+		if (detailMode) {
+			const pct = String(hitRate).padStart(3);
+			return `Input: ${padTokens(usage.cacheRead, PAD_IN)}/${padTokens(totalIn, PAD_IN)} (${pct}%)  Output: ${padTokens(usage.output, PAD_OUT)}  Sum: ${padSum(sum)}  Cost: ${padCost(cost)}`;
+		}
+		return `Cache: ${String(hitRate).padStart(3)}%  Sum: ${padSum(sum)}  Cost: ${padCost(cost)}`;
 	}
-	return `Input: ${fmtTokens(usage.cacheRead)}/${fmtTokens(totalIn)} (${hitRate}%)  Output: ${fmtTokens(usage.output)}  Cost: ${fmtCost(cost)}`;
+	if (detailMode) {
+		return `Input: ${fmtTokens(usage.cacheRead)}/${fmtTokens(totalIn)} (${hitRate}%)  Output: ${fmtTokens(usage.output)}  Sum: ${fmtTokens(sum)}  Cost: ${fmtCost(cost)}`;
+	}
+	return `Cache: ${hitRate}%  Sum: ${fmtTokens(sum)}  Cost: ${fmtCost(cost)}`;
 }
 
 /**
@@ -97,13 +113,43 @@ function buildBar(tokenCount: number | null, max: number): string {
 	const clamped = Math.min(100, Math.max(0, pct));
 	const filled = Math.round((clamped / 100) * BAR_WIDTH);
 	const empty = BAR_WIDTH - filled;
-	return `[\u2588${filled > 0 ? `\u2588`.repeat(filled - 1) : ""}${"\u2591".repeat(empty)} ${pct.toFixed(0).padStart(3)}% (Max:${fmtTokens(max)})]`;
+	return `[\u2588${filled > 0 ? `\u2588`.repeat(filled - 1) : ""}${"\u2591".repeat(empty)} ${pct.toFixed(0).padStart(3)}% (${fmtTokens(tokenCount)}/${fmtTokens(max)})]`;
+}
+
+// ============================================================================
+// Balance
+// ============================================================================
+
+const BALANCE_PROVIDER = "deepseek";
+
+async function fetchBalance(ctx: ExtensionContext): Promise<void> {
+	try {
+		const resolver = ctx.modelRegistry.resolver(BALANCE_PROVIDER);
+		const apiKey = await resolver({ lastChance: false, error: undefined });
+		if (!apiKey) { balanceStr = "\u{1F4B0} Bal: N/A"; return; }
+		const rawBase = ctx.modelRegistry.getProviderBaseUrl(BALANCE_PROVIDER) ?? "https://api.deepseek.com";
+		const base = rawBase.replace(/\/v1\/?$/, "");
+		const resp = await fetch(`${base}/user/balance`, {
+			headers: { Authorization: `Bearer ${apiKey}` },
+			signal: AbortSignal.timeout(5000),
+		});
+		if (!resp.ok) { balanceStr = "\u{1F4B0} Bal: N/A"; return; }
+		const data = await resp.json() as { balance_infos?: Array<{ currency: string; total_balance: string }> };
+		const cny = data.balance_infos?.find(b => b.currency === "CNY");
+		if (cny) {
+			const amt = parseFloat(cny.total_balance);
+			balanceStr = `\u{1F4B0} Bal: ¥${amt.toFixed(2)}`;
+		} else {
+			balanceStr = "\u{1F4B0} Bal: N/A";
+		}
+	} catch {
+		balanceStr = "\u{1F4B0} Bal: N/A";
+	}
 }
 
 // ============================================================================
 // UI refresh
 // ============================================================================
-
 function refresh(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	if (!ctx.hasUI) return;
 
@@ -118,10 +164,11 @@ function refresh(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
 	const lines: string[] = [];
 
-	// Line 1: colored progress bar
+	// Line 1: colored progress bar (with balance if available)
 	const bar = buildBar(lastContextTokens, budget);
 	if (bar && lastContextTokens !== null) {
-		lines.push(colorBar(bar, lastContextTokens, budget, ctx.ui.theme));
+		const colored = colorBar(bar, lastContextTokens, budget, ctx.ui.theme);
+		lines.push(balanceStr ? `${colored}  ${balanceStr}` : colored);
 	}
 
 	// Line 2: total stats
@@ -164,11 +211,18 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 	pi.setLabel("DeepSeek Cost Tracker");
 
 	pi.registerCommand("budget", {
-		description: "Set context budget threshold (e.g. /budget 300K, /budget 500)",
+		description: "Set context budget (e.g. /budget 300K) or toggle display mode (/budget detail)",
 		handler: async (args: string, ctx) => {
-			const m = args?.trim().match(/^(\d+(?:\.\d+)?)\s*K?$/i);
+			const trimmed = args?.trim() ?? "";
+			if (/^detail$/i.test(trimmed)) {
+				detailMode = !detailMode;
+				ctx.ui.notify(`Display: ${detailMode ? "detail" : "brief"}`, "info");
+				refresh(pi, ctx);
+				return;
+			}
+			const m = trimmed.match(/^(\d+(?:\.\d+)?)\s*K?$/i);
 			if (!m) {
-				ctx.ui.notify("Usage: /budget <number>K (e.g. /budget 300K)", "error");
+				ctx.ui.notify("Usage: /budget <number>K | /budget detail", "error");
 				return;
 			}
 			budget = Math.round(parseFloat(m[1]) * 1000);
@@ -183,11 +237,14 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 	});
 
 	// Session init
-	const onInit = (_event: unknown, ctx: ExtensionContext) => {
+	const onInit = async (_event: unknown, ctx: ExtensionContext) => {
 		const s = ctx.sessionManager.getUsageStatistics();
 		previousTotal = { input: s.input, output: s.output, cacheRead: s.cacheRead, cacheWrite: s.cacheWrite };
 		lastContextTokens = null;
 		turnSummary = null;
+		balanceStr = null;
+		refresh(pi, ctx);
+		await fetchBalance(ctx);
 		refresh(pi, ctx);
 	};
 
@@ -222,6 +279,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 		}
 
 		previousTotal = cur;
+		await fetchBalance(ctx);
 		refresh(pi, ctx);
 	});
 }
