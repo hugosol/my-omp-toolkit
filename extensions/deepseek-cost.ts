@@ -3,7 +3,7 @@
  *
  * Shows cumulative and per-turn cost in the widget area with an inline
  * progress bar tracking context usage against a configurable budget
- * (default 250K).  Also tracks daily accumulated spend per session,
+ * (default 220K).  Also tracks daily accumulated spend per session,
  * persisted to ~/.omp/cost-archive/deepseek-cost.json.
  *
  * Pricing (RMB per million tokens, deepseek-v4-pro):
@@ -32,7 +32,7 @@ const PRICE_RMB_PER_1M = {
 	output: 6,
 } as const;
 
-const DEFAULT_BUDGET = 250_000;
+const DEFAULT_BUDGET = 220_000;
 const BAR_WIDTH = 20;
 
 /** Palette for per-session segment bar (8 colors, cycles). */
@@ -231,6 +231,17 @@ function padSum(sum: number): string {
 	return fmtTokens(sum).padStart(PAD_SUM);
 }
 
+/** Build ¥I/O ratio string: input+cache cost % vs output cost %. Returns "--:--" when total cost is zero. */
+function ioRatio(usage: { input: number; cacheRead: number; output: number }): string {
+	const iCost = rmbCost(usage.input, usage.cacheRead, 0);
+	const oCost = rmbCost(0, 0, usage.output);
+	const total = iCost + oCost;
+	if (total <= 0) return `¥I/O: --:--`;
+	const iPct = Math.round((iCost / total) * 100);
+	const oPct = 100 - iPct;
+	return `¥I/O: ${iPct}:${oPct}`;
+}
+
 function buildStatusLine(usage: { input: number; cacheRead: number; output: number }, pad = false): string {
 	const totalIn = usage.input + usage.cacheRead;
 	const sum = totalIn + usage.output;
@@ -239,14 +250,14 @@ function buildStatusLine(usage: { input: number; cacheRead: number; output: numb
 	if (pad) {
 		if (detailMode) {
 			const pct = String(hitRate).padStart(3);
-			return `Input: ${padTokens(usage.cacheRead, PAD_IN)}/${padTokens(totalIn, PAD_IN)} (${pct}%)  Output: ${padTokens(usage.output, PAD_OUT)}  Sum: ${padSum(sum)}  Cost: ${padCost(cost)}`;
+			return `Input: ${padTokens(usage.cacheRead, PAD_IN)}/${padTokens(totalIn, PAD_IN)} (${pct}%)  Output: ${padTokens(usage.output, PAD_OUT)}  ${ioRatio(usage)}  Sum: ${padSum(sum)}  Cost: ${padCost(cost)}`;
 		}
-		return `Cache: ${String(hitRate).padStart(3)}%  Sum: ${padSum(sum)}  Cost: ${padCost(cost)}`;
+		return `Cache: ${String(hitRate).padStart(3)}%  ${ioRatio(usage)}  Sum: ${padSum(sum)}  Cost: ${padCost(cost)}`;
 	}
 	if (detailMode) {
-		return `Input: ${fmtTokens(usage.cacheRead)}/${fmtTokens(totalIn)} (${hitRate}%)  Output: ${fmtTokens(usage.output)}  Sum: ${fmtTokens(sum)}  Cost: ${fmtCost(cost)}`;
+		return `Input: ${fmtTokens(usage.cacheRead)}/${fmtTokens(totalIn)} (${hitRate}%)  Output: ${fmtTokens(usage.output)}  ${ioRatio(usage)}  Sum: ${fmtTokens(sum)}  Cost: ${fmtCost(cost)}`;
 	}
-	return `Cache: ${hitRate}%  Sum: ${fmtTokens(sum)}  Cost: ${fmtCost(cost)}`;
+	return `Cache: ${hitRate}%  ${ioRatio(usage)}  Sum: ${fmtTokens(sum)}  Cost: ${fmtCost(cost)}`;
 }
 
 /**
@@ -399,11 +410,10 @@ function refresh(pi: ExtensionAPI, ctx: ExtensionContext): void {
 // Progress bar color helper (uses theme.fg)
 // ===========================================
 
-function barColor(pct: number): "dim" | "success" | "warning" | "thinkingHigh" | "error" {
-	if (pct < 25) return "dim";
-	if (pct < 50) return "success";
-	if (pct < 75) return "warning";
-	if (pct <= 100) return "thinkingHigh";
+function barColor(pct: number): "dim" | "success" | "warning" | "error" {
+	if (pct < 36) return "dim";
+	if (pct < 64) return "success";
+	if (pct < 82) return "warning";
 	return "error";
 }
 
