@@ -35,6 +35,19 @@ const PRICE_RMB_PER_1M = {
 const DEFAULT_BUDGET = 220_000;
 const BAR_WIDTH = 20;
 
+// Segment bar constants
+/** Maximum segment bar width in characters. */
+const MAX_SEGMENT_BAR = 50;
+/** Fine mode: 1/8 block = ¥0.05, 1 char (8 blocks) = ¥0.40, used when totalCost ≤ SCALE_THRESHOLD. */
+const FINE_BLOCK_RMB = 0.05;
+const BLOCKS_PER_CHAR = 8;
+/** Coarse mode: 1 full block = ¥1.00, used when totalCost > SCALE_THRESHOLD. */
+const COARSE_BLOCK_RMB = 1.00;
+/** Threshold for switching from fine to coarse mode. */
+const SCALE_THRESHOLD = 20.00;
+/** Fine mode max blocks (50 chars × 8 blocks/char). */
+const MAX_FINE_BLOCKS = 400;
+
 /** Palette for per-session segment bar (8 colors, cycles). */
 const SEGMENT_PALETTE = [
 	"success",
@@ -47,9 +60,6 @@ const SEGMENT_PALETTE = [
 	"syntaxKeyword",
 ] as const;
 
-/** Maximum segment bar width in characters. */
-const MAX_SEGMENT_BAR = 20;
-
 // ============================================================================
 // Session state (widget display)
 // ============================================================================
@@ -59,7 +69,7 @@ let budget = DEFAULT_BUDGET;
 let previousTotal = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 let lastContextTokens: number | null = null;
 
-let turnSummary: string | null = null;
+let turnDelta: { input: number; output: number; cacheRead: number } | null = null;
 let balanceStr: string | null = null;
 let detailMode = false;
 
@@ -273,56 +283,129 @@ function buildBar(tokenCount: number | null, max: number): string {
 	return `[\u2588${filled > 0 ? `\u2588`.repeat(filled - 1) : ""}${"\u2591".repeat(empty)} ${pct.toFixed(0).padStart(3)}% (${fmtTokens(tokenCount)}/${fmtTokens(max)})]`;
 }
 
+/** Map a number of 1/8 blocks (1–8) to the corresponding Unicode partial block character. */
+function blockChar(eighths: number): string {
+	const chars = ["", "\u258F", "\u258E", "\u258D", "\u258C", "\u258B", "\u258A", "\u2589", "\u2588"];
+	return chars[eighths] ?? "";
+}
+
+
 /**
  * Build a colored multi-segment bar showing each session's cost proportion.
- * ¥1 = 1 character, capped at MAX_SEGMENT_BAR.
- * Sessions contributing less than 1 character are omitted.
- * Each session gets a colour from SEGMENT_PALETTE cycled by insertion order.
+ *
+ * Two modes:
+ * - Fine (≤ ¥20.00): 1/8 block = ¥0.05, 1 char (8 blocks) = ¥0.40.
+ *   Every session with positive cost gets at least one ▏.
+ * - Coarse (> ¥20.00): 1 full block █ = ¥1.00.
+ *   Sessions < ¥1.00 are hidden.
+ * Both modes capped at MAX_SEGMENT_BAR (50) characters.
  */
 function buildSegmentBar(
 	sessions: DailySession[],
 	totalCost: number,
 	theme: { fg: (color: string, text: string) => string },
 ): string {
-	const segments: { color: string; width: number }[] = [];
-
 	// Quick check: any cost at all?
 	let hasCost = false;
 	for (const s of sessions) { if (s.cost > 0) { hasCost = true; break; } }
 	if (!hasCost || totalCost <= 0) return "";
 
-	// Scale: ¥1 = 1 char, capped at MAX_SEGMENT_BAR
-	const scale = totalCost <= MAX_SEGMENT_BAR ? 1 : MAX_SEGMENT_BAR / totalCost;
-	const totalChars = Math.max(1, Math.round(totalCost * scale));
+	if (totalCost <= SCALE_THRESHOLD) {
+		return buildFineBar(sessions, totalCost, theme);
+	}
+	return buildCoarseBar(sessions, theme);
+}
 
-	let allocated = 0;
+/** Fine mode: 1/8 block = ¥0.05, each session ≥ 1 block (ceil). */
+function buildFineBar(
+	sessions: DailySession[],
+	totalCost: number,
+	theme: { fg: (color: string, text: string) => string },
+): string {
+	const entries: { color: string; rawBlocks: number }[] = [];
+	let rawTotal = 0;
 
 	for (let i = 0; i < sessions.length; i++) {
 		const s = sessions[i];
 		if (s.cost <= 0) continue;
-		const w = Math.round(s.cost * scale);
-		if (w < 1) continue;
-		segments.push({
+		const blocks = Math.ceil(s.cost / FINE_BLOCK_RMB);
+		entries.push({
 			color: SEGMENT_PALETTE[i % SEGMENT_PALETTE.length],
-			width: w,
+			rawBlocks: blocks,
 		});
-		allocated += w;
+		rawTotal += blocks;
 	}
+	if (entries.length === 0) return "";
 
-	if (segments.length === 0) return "";
+	// Allocate blocks, scaling proportionally if over cap
+	const blocks = scaleAlloc(rawTotal, MAX_FINE_BLOCKS, entries.map(e => e.rawBlocks));
 
-	// Correct rounding discrepancy on the last segment
-	const diff = totalChars - allocated;
-	if (diff !== 0) {
-		segments[segments.length - 1].width = Math.max(1, segments[segments.length - 1].width + diff);
-	}
-
+	// Render: each session gets whole characters, last char uses partial block
 	let bar = "[";
-	for (const seg of segments) {
-		bar += theme.fg(seg.color, "\u2588".repeat(seg.width));
+	for (let i = 0; i < entries.length; i++) {
+		const b = blocks[i];
+		const fullChars = Math.floor((b - 1) / BLOCKS_PER_CHAR);
+		const remainder = ((b - 1) % BLOCKS_PER_CHAR) + 1;
+		if (fullChars > 0) {
+			bar += theme.fg(entries[i].color, "\u2588".repeat(fullChars));
+		}
+		bar += theme.fg(entries[i].color, blockChar(remainder));
 	}
 	bar += "]";
 	return bar;
+}
+
+/** Coarse mode: 1 full block = ¥1.00, sessions < ¥1.00 hidden, capped at MAX_SEGMENT_BAR. */
+function buildCoarseBar(
+	sessions: DailySession[],
+	theme: { fg: (color: string, text: string) => string },
+): string {
+	const entries: { color: string; rawChars: number }[] = [];
+	let rawTotal = 0;
+
+	for (let i = 0; i < sessions.length; i++) {
+		const s = sessions[i];
+		if (s.cost < COARSE_BLOCK_RMB) continue;
+		const chars = Math.ceil(s.cost / COARSE_BLOCK_RMB);
+		entries.push({
+			color: SEGMENT_PALETTE[i % SEGMENT_PALETTE.length],
+			rawChars: chars,
+		});
+		rawTotal += chars;
+	}
+	if (entries.length === 0) return "";
+
+	const widths = scaleAlloc(rawTotal, MAX_SEGMENT_BAR, entries.map(e => e.rawChars));
+
+	let bar = "[";
+	for (let i = 0; i < entries.length; i++) {
+		bar += theme.fg(entries[i].color, "\u2588".repeat(widths[i]));
+	}
+	bar += "]";
+	return bar;
+}
+
+/**
+ * Scale raw allocations to fit within a cap, keeping a floor of 1 per entry.
+ * Returns an array of integer allocations summing to at most `max` (or cap-corrected).
+ */
+function scaleAlloc(rawTotal: number, cap: number, raws: number[]): number[] {
+	if (rawTotal <= cap) return raws;
+
+	const scale = cap / rawTotal;
+	const allocs = raws.map(r => Math.max(1, Math.round(r * scale)));
+	const sum = allocs.reduce((a, b) => a + b, 0);
+	const diff = cap - sum;
+
+	if (diff !== 0 && allocs.length > 0) {
+		// Adjust the largest entry to absorb the rounding discrepancy
+		let largestIdx = 0;
+		for (let i = 1; i < allocs.length; i++) {
+			if (allocs[i] > allocs[largestIdx]) largestIdx = i;
+		}
+		allocs[largestIdx] = Math.max(1, allocs[largestIdx] + diff);
+	}
+	return allocs;
 }
 
 // ============================================================================
@@ -399,8 +482,8 @@ function refresh(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	}, true)}`);
 
 	// Line 4: turn stats (if available)
-	if (turnSummary) {
-		lines.push(turnSummary);
+	if (turnDelta) {
+		lines.push(`\u{1F4CA} Turn:   ${buildStatusLine(turnDelta, true)}`);
 	}
 
 	ctx.ui.setWidget(WIDGET_KEY, lines);
@@ -478,7 +561,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 		const s = ctx.sessionManager.getUsageStatistics();
 		previousTotal = { input: s.input, output: s.output, cacheRead: s.cacheRead, cacheWrite: s.cacheWrite };
 		lastContextTokens = null;
-		turnSummary = null;
+		turnDelta = null;
 		balanceStr = null;
 
 		// Ensure session is tracked in daily JSON with current stats as baseline
@@ -502,7 +585,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 
 	// Clear turn summary when agent starts a new run
 	pi.on("agent_start", (_event, ctx) => {
-		turnSummary = null;
+		turnDelta = null;
 		refresh(pi, ctx);
 	});
 
@@ -566,11 +649,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 			cacheRead: cur.cacheRead - previousTotal.cacheRead,
 		};
 
-		if (delta.input > 0 || delta.output > 0 || delta.cacheRead > 0) {
-			turnSummary = `\u{1F4CA} Turn:   ${buildStatusLine(delta, true)}`;
-		} else {
-			turnSummary = null;
-		}
+		turnDelta = (delta.input > 0 || delta.output > 0 || delta.cacheRead > 0) ? delta : null;
 
 		previousTotal = cur;
 		await fetchBalance(ctx);
