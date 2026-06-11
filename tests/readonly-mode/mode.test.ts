@@ -5,8 +5,9 @@ import {
   buildScope,
   buildPromptContent,
   resolveToolPolicy,
+  dispatchToolCall,
 } from "../../extensions/readonly-mode/mode";
-import type { TurnInjection } from "../../extensions/readonly-mode/mode";
+import type { TurnInjection, DispatchResult } from "../../extensions/readonly-mode/mode";
 import { DEFAULT_POLICY } from "../../extensions/readonly-mode/policies";
 
 // ============================================================
@@ -406,5 +407,431 @@ describe("buildPromptContent", () => {
     expect(content).toContain("EXPLORE MODE");
     expect(content).toContain("all directories");
     expect(content).not.toContain("Allowed search paths");
+  });
+});
+
+// ============================================================
+// dispatchToolCall — integration of policy lookup + guard + format
+// ============================================================
+
+describe("dispatchToolCall", () => {
+  const cwd = "/home/user/project";
+
+  function mode(name: "build" | "chat" | "explore" | "debug", scopePaths: string[] = []): ModeState {
+    const m = new ModeState();
+    m.current = name;
+    m.scopePaths = scopePaths;
+    return m;
+  }
+
+  // ── Build mode: no interception ──
+
+  test("build mode returns no block and no audit", () => {
+    const result = dispatchToolCall({ toolName: "write", input: {} }, mode("build"), cwd);
+    expect(result.block).toBeUndefined();
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  test("build mode allows bash rm (everything is allowed)", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "rm -rf /" } }, mode("build"), cwd);
+    expect(result.block).toBeUndefined();
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  // ── Chat mode: block-level tools ──
+
+  test("chat mode blocks write", () => {
+    const result = dispatchToolCall({ toolName: "write", input: {} }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("modifies files");
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  test("chat mode blocks edit", () => {
+    const result = dispatchToolCall({ toolName: "edit", input: {} }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("modifies files");
+  });
+
+  test("chat mode blocks ast_edit", () => {
+    const result = dispatchToolCall({ toolName: "ast_edit", input: {} }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("modifies files");
+  });
+
+  test("chat mode blocks eval", () => {
+    const result = dispatchToolCall({ toolName: "eval", input: {} }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("arbitrary code");
+  });
+
+  test("chat mode blocks debug", () => {
+    const result = dispatchToolCall({ toolName: "debug", input: {} }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("modify program state");
+  });
+
+  test("chat mode blocks unknown tool via DEFAULT_POLICY", () => {
+    const result = dispatchToolCall({ toolName: "made_up_tool", input: {} }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("Unknown tool");
+  });
+
+  // ── Chat mode: allow-level tools ──
+
+  test("chat mode allows read", () => {
+    const result = dispatchToolCall({ toolName: "read", input: {} }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  test("chat mode allows web_search", () => {
+    const result = dispatchToolCall({ toolName: "web_search", input: {} }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode allows ask", () => {
+    const result = dispatchToolCall({ toolName: "ask", input: {} }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode allows todo", () => {
+    const result = dispatchToolCall({ toolName: "todo", input: {} }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode allows resolve", () => {
+    const result = dispatchToolCall({ toolName: "resolve", input: {} }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  // ── Chat mode: find / ast_grep (scope-check tools like search) ──
+
+  test("chat mode allows find within scope", () => {
+    const result = dispatchToolCall({ toolName: "find", input: { paths: "src/main.ts" } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode blocks find outside scope", () => {
+    const result = dispatchToolCall({ toolName: "find", input: { paths: "/etc/passwd" } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("outside allowed scope");
+  });
+
+  test("chat mode allows ast_grep within scope", () => {
+    const result = dispatchToolCall({ toolName: "ast_grep", input: { paths: ["src/**/*.ts"] } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode blocks ast_grep outside scope", () => {
+    const result = dispatchToolCall({ toolName: "ast_grep", input: { paths: ["/etc/secret.ts"] } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("outside allowed scope");
+  });
+
+  // ── Chat mode: check-level tools (guards exercised) ──
+
+  test("chat mode allows bash ls", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "ls -la" } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode blocks bash rm", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "rm -rf /" } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("whitelist");
+  });
+
+  test("chat mode blocks bash command chaining", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "ls && rm file" } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("chaining");
+  });
+
+  test("chat mode blocks bash output redirection", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "ls > out.txt" } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("redirection");
+  });
+
+  test("chat mode blocks sed -i", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "sed -i 's/a/b/' file" } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("sed -i");
+  });
+
+  test("chat mode allows search within scope", () => {
+    const result = dispatchToolCall({ toolName: "search", input: { paths: "src/main.ts" } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode blocks search outside scope", () => {
+    const result = dispatchToolCall({ toolName: "search", input: { paths: "/etc/passwd" } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("outside allowed scope");
+  });
+
+  test("chat mode blocks LSP rename", () => {
+    const result = dispatchToolCall({ toolName: "lsp", input: { action: "rename" } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("rename");
+  });
+
+  test("chat mode allows LSP definition", () => {
+    const result = dispatchToolCall({ toolName: "lsp", input: { action: "definition" } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode blocks LSP rename_file", () => {
+    const result = dispatchToolCall({ toolName: "lsp", input: { action: "rename_file" } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("rename_file");
+  });
+
+  test("chat mode blocks LSP code_actions with apply: true", () => {
+    const result = dispatchToolCall({ toolName: "lsp", input: { action: "code_actions", apply: true } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("code_actions");
+  });
+
+  test("chat mode allows LSP code_actions without apply", () => {
+    const result = dispatchToolCall({ toolName: "lsp", input: { action: "code_actions" } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode allows LSP hover", () => {
+    const result = dispatchToolCall({ toolName: "lsp", input: { action: "hover" } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode blocks browser run", () => {
+    const result = dispatchToolCall({ toolName: "browser", input: { action: "run" } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("Browser");
+  });
+
+  test("chat mode allows browser open", () => {
+    const result = dispatchToolCall({ toolName: "browser", input: { action: "open" } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode allows browser close", () => {
+    const result = dispatchToolCall({ toolName: "browser", input: { action: "close" } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode allows task explore agent", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "explore" } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode allows task librarian agent", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "librarian" } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode allows task plan agent", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "plan" } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode allows task reviewer agent", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "reviewer" } }, mode("chat"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("chat mode blocks task agent with alternative hint", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "task" } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    // formatBlock applies use_alternative → "Instead try"
+    expect(result.block!.reason).toContain("Instead try");
+  });
+
+  test("chat mode blocks task unknown agent with switch_to_build", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "oracle" } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("switch to Build mode");
+  });
+
+  test("chat mode blocks task with missing agent", () => {
+    const result = dispatchToolCall({ toolName: "task", input: {} }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("switch to Build mode");
+  });
+
+  test("chat mode blocks task quick_task agent with alternative hint", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "quick_task" } }, mode("chat"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("Instead try");
+  });
+
+  // ── Debug mode: expanded access + audit ──
+
+  test("debug mode allows write and flags audit", () => {
+    const result = dispatchToolCall({ toolName: "write", input: {} }, mode("debug"), cwd);
+    expect(result.block).toBeUndefined();
+    expect(result.shouldAudit).toBe(true);
+  });
+
+  test("debug mode allows edit and flags audit", () => {
+    const result = dispatchToolCall({ toolName: "edit", input: {} }, mode("debug"), cwd);
+    expect(result.block).toBeUndefined();
+    expect(result.shouldAudit).toBe(true);
+  });
+
+  test("debug mode allows eval and flags audit", () => {
+    const result = dispatchToolCall({ toolName: "eval", input: {} }, mode("debug"), cwd);
+    expect(result.block).toBeUndefined();
+    expect(result.shouldAudit).toBe(true);
+  });
+
+  test("debug mode allows debug tool and flags audit", () => {
+    const result = dispatchToolCall({ toolName: "debug", input: {} }, mode("debug"), cwd);
+    expect(result.block).toBeUndefined();
+    expect(result.shouldAudit).toBe(true);
+  });
+
+  test("debug mode allows browser run", () => {
+    const result = dispatchToolCall({ toolName: "browser", input: { action: "run" } }, mode("debug"), cwd);
+    expect(result.block).toBeUndefined();
+    expect(result.shouldAudit).toBe(true);
+  });
+
+  test("debug mode blocks destructive bash and does NOT flag audit", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "rm file.txt" } }, mode("debug"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("Destructive");
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  test("debug mode blocks command chaining and does NOT flag audit", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "ls && rm file" } }, mode("debug"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  test("debug mode allows diagnostic bash and flags audit", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "npm test" } }, mode("debug"), cwd);
+    expect(result.block).toBeUndefined();
+    expect(result.shouldAudit).toBe(true);
+  });
+
+  test("debug mode blocks destructive git commands and does NOT flag audit", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "git push origin main" } }, mode("debug"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("Destructive");
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  test("debug mode blocks package install and does NOT flag audit", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "npm install pkg" } }, mode("debug"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("Destructive");
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  test("debug mode blocks bash output redirection and does NOT flag audit", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "ls > out.txt" } }, mode("debug"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("redirection");
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  test("debug mode blocks sed -i and does NOT flag audit", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "sed -i 's/a/b/' file" } }, mode("debug"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("Destructive");
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  test("debug mode blocks empty bash command and does NOT flag audit", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "" } }, mode("debug"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  test("debug mode allows task oracle and flags audit", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "oracle" } }, mode("debug"), cwd);
+    expect(result.block).toBeUndefined();
+    expect(result.shouldAudit).toBe(true);
+  });
+
+  test("debug mode blocks task designer and does NOT flag audit", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "designer" } }, mode("debug"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  test("debug mode read is allowed but still flags audit (caller filters)", () => {
+    const result = dispatchToolCall({ toolName: "read", input: {} }, mode("debug"), cwd);
+    expect(result.block).toBeUndefined();
+    // read is allowed in debug mode, so shouldAudit is true.
+    // The caller (index.ts) applies isReadonlyAuditTool to filter it out.
+    expect(result.shouldAudit).toBe(true);
+  });
+
+  test("debug mode allows task explore agent and flags audit", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "explore" } }, mode("debug"), cwd);
+    expect(result.block).toBeUndefined();
+    expect(result.shouldAudit).toBe(true);
+  });
+
+  test("debug mode blocks task 'task' agent and does NOT flag audit", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "task" } }, mode("debug"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  test("debug mode blocks task quick_task agent and does NOT flag audit", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "quick_task" } }, mode("debug"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.shouldAudit).toBe(false);
+  });
+
+
+  test("debug mode blocks task with missing agent and does NOT flag audit", () => {
+    const result = dispatchToolCall({ toolName: "task", input: {} }, mode("debug"), cwd);
+    expect(result.block).toBeDefined();
+    expect(result.shouldAudit).toBe(false);
+  });
+
+  // ── Explore mode: scope enforcement ──
+
+  test("explore mode with 'all' scopePaths allows search anywhere", () => {
+    const m = mode("explore", ["all"]);
+    const result = dispatchToolCall({ toolName: "search", input: { paths: "/etc/passwd" } }, m, cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("explore mode with specific scopePaths blocks search outside them", () => {
+    const m = mode("explore", ["/other/lib"]);
+    const result = dispatchToolCall({ toolName: "search", input: { paths: "/etc/passwd" } }, m, cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("outside allowed scope");
+  });
+
+
+  test("explore mode blocks write", () => {
+    const m = mode("explore", ["/other/lib"]);
+    const result = dispatchToolCall({ toolName: "write", input: {} }, m, cwd);
+    expect(result.block).toBeDefined();
+    expect(result.block!.reason).toContain("modifies files");
+  });
+  // ── formatBlock integration: hints become formatted suffixes ──
+
+  test("switch_to_build hint produces '/readonly' suffix", () => {
+    const result = dispatchToolCall({ toolName: "write", input: {} }, mode("chat"), cwd);
+    expect(result.block!.reason).toContain("/readonly");
+  });
+
+  test("use_alternative hint produces 'Instead try' suffix", () => {
+    const result = dispatchToolCall({ toolName: "browser", input: { action: "run" } }, mode("chat"), cwd);
+    expect(result.block!.reason).toContain("Instead try");
+  });
+
+  test("silent hint produces no extra suffix on whitelist violations", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "rm -rf /" } }, mode("chat"), cwd);
+    expect(result.block!.reason).not.toContain("/readonly");
+    expect(result.block!.reason).not.toContain("Instead try");
   });
 });

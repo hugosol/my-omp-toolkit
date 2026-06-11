@@ -1,14 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
-import { formatBlock } from "./policies";
-import type { BlockResult } from "./policies";
-
 
 import { CLEANUP_HISTORY } from "./prompts";
 
 import { recordAudit, clearAudit, toggleAudit, showCollapsed, setAuditCtx } from "./audit";
 
-import { ModeState, MODES } from "./mode";
+import { ModeState, MODES, dispatchToolCall } from "./mode";
 
 // ============================================================
 // Audit helpers
@@ -195,33 +192,12 @@ export default function readonlyMode(pi: ExtensionAPI) {
 
   // Unified tool call interception
   pi.on("tool_call", async (event, ctx) => {
-    // Build mode: no interception
-    if (mode.current === "build") return;
+    const result = dispatchToolCall(event, mode, ctx.cwd);
 
-    const policy = mode.resolveToolPolicy(event.toolName);
-
-    let raw: BlockResult | undefined;
-
-    if (policy.type === "block") {
-      raw = {
-        block: true,
-        reason: policy.reason ?? "",
-        hint: policy.hint ?? "switch_to_build",
-        alternatives: policy.alternatives,
-      };
-    } else if (policy.type === "check") {
-      raw = policy.check!(event, {
-        scope: mode.getScope(ctx.cwd),
-        cwd: ctx.cwd,
-      });
-    }
-
-    // Record audit trail for allowed non-readonly tools in Debug mode
-    if (mode.current === "debug" && !raw && !isReadonlyAuditTool(event.toolName)) {
+    if (result.shouldAudit && !isReadonlyAuditTool(event.toolName)) {
       recordAudit(event.toolName, auditDetail(event.toolName, event.input));
     }
 
-    if (!raw) return;
-    return formatBlock(raw);
+    return result.block;
   });
 }

@@ -19,7 +19,8 @@ import {
   MERGED_DEBUG_POLICIES,
   DEFAULT_POLICY,
 } from "./policies";
-import type { ToolPolicy } from "./policies";
+import type { ToolPolicy, BlockResult } from "./policies";
+import { formatBlock } from "./policies";
 
 // ──  Dimension types  ──
 
@@ -242,4 +243,49 @@ export class ModeState {
     this._prev = this.current;
     this._prevScope = this.scopePaths.join("|");
   }
+}
+
+// ============================================================
+// dispatchToolCall — pure decision: block or allow + audit flag.
+// Extracted from index.ts so the dispatch chain is independently
+// testable without the framework event system.
+// ============================================================
+
+export interface DispatchResult {
+  /** undefined = allowed; defined = blocked with formatted reason */
+  block?: { block: true; reason: string };
+  /** Debug mode + allowed operation → audit candidate (caller filters by tool) */
+  shouldAudit: boolean;
+}
+
+/** Resolve policy, run guard, format result — all in one callable unit. */
+export function dispatchToolCall(
+  event: { toolName: string; input: unknown },
+  mode: ModeState,
+  cwd: string,
+): DispatchResult {
+  if (mode.current === "build") return { shouldAudit: false };
+
+  const policy = mode.resolveToolPolicy(event.toolName);
+  let raw: BlockResult | undefined;
+
+  if (policy.type === "block") {
+    raw = {
+      block: true,
+      reason: policy.reason ?? "",
+      hint: policy.hint ?? "switch_to_build",
+      alternatives: policy.alternatives,
+    };
+  } else if (policy.type === "check") {
+    raw = policy.check!(event, {
+      scope: mode.getScope(cwd),
+      cwd,
+    });
+  }
+
+  const blocked = raw !== undefined;
+  return {
+    block: blocked ? formatBlock(raw) : undefined,
+    shouldAudit: mode.current === "debug" && !blocked,
+  };
 }
