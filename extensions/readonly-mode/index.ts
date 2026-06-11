@@ -69,7 +69,12 @@ export default function readonlyMode(pi: ExtensionAPI) {
     Object.assign(state, patch);
     setWidget(ctx);
     setAuditCtx(ctx);
-    if (!state.debugMode) showCollapsed();
+    if (state.debugMode) {
+      showCollapsed();
+    } else {
+      clearAudit();
+      showCollapsed();
+    }
   }
 
   pi.setLabel("Read-only Mode");
