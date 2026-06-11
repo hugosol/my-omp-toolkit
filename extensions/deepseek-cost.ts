@@ -91,6 +91,8 @@ interface DailyData {
 	totalCost: number;
 	totalTokens: { input: number; cacheRead: number; output: number };
 	sessions: DailySession[];
+	start_bal?: number;
+	end_bal?: number;
 }
 
 let dailyCache: DailyData | null = null;
@@ -145,8 +147,7 @@ function writeDaily(data: DailyData): void {
 	fs.writeFileSync(getDailyPath(), JSON.stringify(data, null, 2), "utf-8");
 }
 
-/** Archive current daily file with start/end timestamps, start a fresh one. */
-function archiveDaily(): string | null {
+function archiveDaily(balance: number | null): string | null {
 	const data = readDaily();
 	if (data.totalCost <= 0 && data.sessions.length === 0) return null;
 
@@ -160,7 +161,8 @@ function archiveDaily(): string | null {
 	);
 
 	ensureArchiveDir();
-	fs.writeFileSync(archivePath, JSON.stringify({ ...data, end }, null, 2), "utf-8");
+	const archived = { ...data, end, ...(balance !== null ? { end_bal: balance } : {}) };
+	fs.writeFileSync(archivePath, JSON.stringify(archived, null, 2), "utf-8");
 
 	// Start fresh
 	const fresh: DailyData = {
@@ -168,6 +170,7 @@ function archiveDaily(): string | null {
 		totalCost: 0,
 		totalTokens: { input: 0, cacheRead: 0, output: 0 },
 		sessions: [],
+		...(balance !== null ? { start_bal: balance } : {}),
 	};
 	writeDaily(fresh);
 	return archivePath;
@@ -413,29 +416,31 @@ function scaleAlloc(rawTotal: number, cap: number, raws: number[]): number[] {
 // ============================================================================
 
 const BALANCE_PROVIDER = "deepseek";
-
-async function fetchBalance(ctx: ExtensionContext): Promise<void> {
+async function fetchBalance(ctx: ExtensionContext): Promise<number | null> {
 	try {
 		const resolver = ctx.modelRegistry.resolver(BALANCE_PROVIDER);
 		const apiKey = await resolver({ lastChance: false, error: undefined });
-		if (!apiKey) { balanceStr = "\u{1F4B0} Bal: N/A"; return; }
+		if (!apiKey) { balanceStr = "\u{1F4B0} Bal: N/A"; return null; }
 		const rawBase = ctx.modelRegistry.getProviderBaseUrl(BALANCE_PROVIDER) ?? "https://api.deepseek.com";
 		const base = rawBase.replace(/\/v1\/?$/, "");
 		const resp = await fetch(`${base}/user/balance`, {
 			headers: { Authorization: `Bearer ${apiKey}` },
 			signal: AbortSignal.timeout(5000),
 		});
-		if (!resp.ok) { balanceStr = "\u{1F4B0} Bal: N/A"; return; }
+		if (!resp.ok) { balanceStr = "\u{1F4B0} Bal: N/A"; return null; }
 		const data = await resp.json() as { balance_infos?: Array<{ currency: string; total_balance: string }> };
 		const cny = data.balance_infos?.find(b => b.currency === "CNY");
 		if (cny) {
 			const amt = parseFloat(cny.total_balance);
 			balanceStr = `\u{1F4B0} Bal: ¥${amt.toFixed(2)}`;
+			return amt;
 		} else {
 			balanceStr = "\u{1F4B0} Bal: N/A";
+			return null;
 		}
 	} catch {
 		balanceStr = "\u{1F4B0} Bal: N/A";
+		return null;
 	}
 }
 
@@ -519,7 +524,8 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 
 			// /budget clear — archive daily tracking and reset
 			if (/^clear$/i.test(trimmed)) {
-				const archived = archiveDaily();
+				const bal = await fetchBalance(ctx);
+				const archived = archiveDaily(bal);
 				if (archived) {
 					ctx.ui.notify(`Daily tracking archived → ${path.basename(archived)}`, "info");
 				} else {
