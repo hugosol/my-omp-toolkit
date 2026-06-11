@@ -16,7 +16,7 @@ import {
 } from "./scope";
 import {
   TOOL_POLICIES,
-  DEBUG_TOOL_POLICIES,
+  MERGED_DEBUG_POLICIES,
   DEFAULT_POLICY,
 } from "./policies";
 import type { ToolPolicy } from "./policies";
@@ -144,7 +144,7 @@ export function resolveToolPolicy(
   toolKey: "build" | "readonly" | "debug",
 ): ToolPolicy {
   if (toolKey === "build") return { type: "allow" };
-  const table = toolKey === "debug" ? DEBUG_TOOL_POLICIES : TOOL_POLICIES;
+  const table = toolKey === "debug" ? MERGED_DEBUG_POLICIES : TOOL_POLICIES;
   return table[toolName] ?? DEFAULT_POLICY;
 }
 

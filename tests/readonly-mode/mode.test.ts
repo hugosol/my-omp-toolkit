@@ -7,7 +7,7 @@ import {
   resolveToolPolicy,
 } from "../../extensions/readonly-mode/mode";
 import type { TurnInjection } from "../../extensions/readonly-mode/mode";
-import { TOOL_POLICIES, DEBUG_TOOL_POLICIES, DEFAULT_POLICY } from "../../extensions/readonly-mode/policies";
+import { DEFAULT_POLICY } from "../../extensions/readonly-mode/policies";
 
 // ============================================================
 // MODES table integrity
@@ -131,6 +131,17 @@ describe("resolveToolPolicy", () => {
     expect(resolveToolPolicy("search", "debug").type).toBe("allow");
     expect(resolveToolPolicy("find", "debug").type).toBe("allow");
     expect(resolveToolPolicy("ast_grep", "debug").type).toBe("allow");
+  });
+
+  test("debug toolKey inherits readonly policies for tools not explicitly overridden", () => {
+    // read-only tools inherited from TOOL_POLICIES via MERGED_DEBUG_POLICIES
+    expect(resolveToolPolicy("read", "debug").type).toBe("allow");
+    expect(resolveToolPolicy("web_search", "debug").type).toBe("allow");
+    expect(resolveToolPolicy("ask", "debug").type).toBe("allow");
+    expect(resolveToolPolicy("todo", "debug").type).toBe("allow");
+    expect(resolveToolPolicy("resolve", "debug").type).toBe("allow");
+    // lsp — inherited from readonly baseline, not overridden in DEBUG_TOOL_POLICIES
+    expect(resolveToolPolicy("lsp", "debug").type).toBe("lsp_check");
   });
 });
 

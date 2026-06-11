@@ -198,6 +198,12 @@ export const DEBUG_TOOL_POLICIES: Record<string, ToolPolicy> = {
   ast_grep: { type: "allow" },
 };
 
+/** Debug mode inherits all readonly policies, with specific overrides on top. */
+export const MERGED_DEBUG_POLICIES: Record<string, ToolPolicy> = {
+  ...TOOL_POLICIES,
+  ...DEBUG_TOOL_POLICIES,
+};
+
 export const DEFAULT_POLICY: ToolPolicy = {
   type: "block",
   reason: "Unknown tool — not available in read-only mode.",
