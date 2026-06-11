@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { checkBash, checkDebugBash, checkSearchPaths, checkLsp, checkBrowser, checkTask, checkDebugTask } from "../../extensions/readonly-mode/checks.ts";
+import { checkBash, checkDebugBash, checkSearchPaths, checkLsp, checkBrowser, checkTask, checkDebugTask } from "../../extensions/readonly-mode/policies.ts";
 
 // ============================================================
 // checkBash
@@ -138,33 +138,33 @@ describe("checkSearchPaths", () => {
   const wsScope = ["/home/user/.omp/agent", "/home/user/project"];
 
   test("allows empty paths (default workspace search)", () => {
-    expect(checkSearchPaths({ input: {} }, wsScope, cwd)).toBeUndefined();
-    expect(checkSearchPaths({ input: { paths: [] } }, wsScope, cwd)).toBeUndefined();
+    expect(checkSearchPaths({ input: {} }, { scope: wsScope, cwd })).toBeUndefined();
+    expect(checkSearchPaths({ input: { paths: [] } }, { scope: wsScope, cwd })).toBeUndefined();
   });
 
   test("allows when scope is 'all'", () => {
-    expect(checkSearchPaths({ input: { paths: "/etc/passwd" } }, ["all"], cwd)).toBeUndefined();
+    expect(checkSearchPaths({ input: { paths: "/etc/passwd" } }, { scope: ["all"], cwd })).toBeUndefined();
   });
 
   test("allows paths within the workspace", () => {
-    expect(checkSearchPaths({ input: { paths: "src/main.ts" } }, wsScope, cwd)).toBeUndefined();
-    expect(checkSearchPaths({ input: { paths: ["src/a.ts", "test/b.ts"] } }, wsScope, cwd)).toBeUndefined();
+    expect(checkSearchPaths({ input: { paths: "src/main.ts" } }, { scope: wsScope, cwd })).toBeUndefined();
+    expect(checkSearchPaths({ input: { paths: ["src/a.ts", "test/b.ts"] } }, { scope: wsScope, cwd })).toBeUndefined();
   });
 
   test("allows paths that are internal URIs", () => {
-    expect(checkSearchPaths({ input: { paths: "skill://my-skill" } }, wsScope, cwd)).toBeUndefined();
-    expect(checkSearchPaths({ input: { paths: "omp://config" } }, wsScope, cwd)).toBeUndefined();
+    expect(checkSearchPaths({ input: { paths: "skill://my-skill" } }, { scope: wsScope, cwd })).toBeUndefined();
+    expect(checkSearchPaths({ input: { paths: "omp://config" } }, { scope: wsScope, cwd })).toBeUndefined();
   });
 
   test("blocks paths outside the workspace", () => {
-    const result = checkSearchPaths({ input: { paths: "/etc/passwd" } }, wsScope, cwd);
+    const result = checkSearchPaths({ input: { paths: "/etc/passwd" } }, { scope: wsScope, cwd });
     expect(result).toBeDefined();
     expect(result!.reason).toContain("outside allowed scope");
     expect(result!.hint).toBe("use_alternative");
   });
 
   test("blocks when some paths are outside scope", () => {
-    const result = checkSearchPaths({ input: { paths: ["src/main.ts", "/etc/shadow"] } }, wsScope, cwd);
+    const result = checkSearchPaths({ input: { paths: ["src/main.ts", "/etc/shadow"] } }, { scope: wsScope, cwd });
     expect(result).toBeDefined();
     expect(result!.reason).toContain("/etc/shadow");
   });

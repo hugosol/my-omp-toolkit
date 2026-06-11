@@ -57,7 +57,7 @@ describe("formatBlock", () => {
 
 describe("TOOL_POLICIES", () => {
   test("every tool has a valid policy type", () => {
-    const validTypes = ["allow", "block", "path_check", "bash_check", "lsp_check", "browser_check", "task_check"];
+    const validTypes = ["allow", "block", "check"];
     for (const [tool, policy] of Object.entries(TOOL_POLICIES)) {
       expect(validTypes).toContain(policy.type);
     }
@@ -78,14 +78,17 @@ describe("TOOL_POLICIES", () => {
     }
   });
 
-  test("per-call check tools have check types", () => {
-    expect(TOOL_POLICIES["bash"].type).toBe("bash_check");
-    expect(TOOL_POLICIES["search"].type).toBe("path_check");
-    expect(TOOL_POLICIES["find"].type).toBe("path_check");
-    expect(TOOL_POLICIES["ast_grep"].type).toBe("path_check");
-    expect(TOOL_POLICIES["lsp"].type).toBe("lsp_check");
-    expect(TOOL_POLICIES["browser"].type).toBe("browser_check");
-    expect(TOOL_POLICIES["task"].type).toBe("task_check");
+  test("per-call check tools carry a guard function", () => {
+    expect(TOOL_POLICIES["bash"].type).toBe("check");
+    expect(TOOL_POLICIES["bash"].check).toBeDefined();
+    expect(TOOL_POLICIES["search"].type).toBe("check");
+    expect(TOOL_POLICIES["search"].check).toBeDefined();
+    expect(TOOL_POLICIES["lsp"].type).toBe("check");
+    expect(TOOL_POLICIES["lsp"].check).toBeDefined();
+    expect(TOOL_POLICIES["browser"].type).toBe("check");
+    expect(TOOL_POLICIES["browser"].check).toBeDefined();
+    expect(TOOL_POLICIES["task"].type).toBe("check");
+    expect(TOOL_POLICIES["task"].check).toBeDefined();
   });
 
   test("eval and debug are blocked", () => {

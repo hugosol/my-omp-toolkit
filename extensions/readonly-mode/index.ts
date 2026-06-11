@@ -3,7 +3,6 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { formatBlock } from "./policies";
 import type { BlockResult } from "./policies";
 
-import { checkBash, checkDebugBash, checkSearchPaths, checkLsp, checkBrowser, checkTask, checkDebugTask } from "./checks";
 
 import { CLEANUP_HISTORY } from "./prompts";
 
@@ -203,46 +202,18 @@ export default function readonlyMode(pi: ExtensionAPI) {
 
     let raw: BlockResult | undefined;
 
-    switch (policy.type) {
-      case "allow":
-        break;
-
-      case "block":
-        raw = {
-          block: true,
-          reason: policy.reason ?? "",
-          hint: policy.hint ?? "switch_to_build",
-          alternatives: policy.alternatives,
-        };
-        break;
-
-      case "bash_check":
-        raw = checkBash(event);
-        break;
-
-      case "debug_bash_check":
-        raw = checkDebugBash(event);
-        break;
-
-      case "path_check":
-        raw = checkSearchPaths(event, mode.getScope(ctx.cwd), ctx.cwd);
-        break;
-
-      case "lsp_check":
-        raw = checkLsp(event);
-        break;
-
-      case "browser_check":
-        raw = checkBrowser(event);
-        break;
-
-      case "task_check":
-        raw = checkTask(event);
-        break;
-
-      case "debug_task_check":
-        raw = checkDebugTask(event);
-        break;
+    if (policy.type === "block") {
+      raw = {
+        block: true,
+        reason: policy.reason ?? "",
+        hint: policy.hint ?? "switch_to_build",
+        alternatives: policy.alternatives,
+      };
+    } else if (policy.type === "check") {
+      raw = policy.check!(event, {
+        scope: mode.getScope(ctx.cwd),
+        cwd: ctx.cwd,
+      });
     }
 
     // Record audit trail for allowed non-readonly tools in Debug mode

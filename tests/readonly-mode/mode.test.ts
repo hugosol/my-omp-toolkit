@@ -103,11 +103,11 @@ describe("resolveToolPolicy", () => {
   });
 
   test("readonly toolKey returns check types for conditional tools", () => {
-    expect(resolveToolPolicy("bash", "readonly").type).toBe("bash_check");
-    expect(resolveToolPolicy("search", "readonly").type).toBe("path_check");
-    expect(resolveToolPolicy("lsp", "readonly").type).toBe("lsp_check");
-    expect(resolveToolPolicy("browser", "readonly").type).toBe("browser_check");
-    expect(resolveToolPolicy("task", "readonly").type).toBe("task_check");
+    expect(resolveToolPolicy("bash", "readonly").type).toBe("check");
+    expect(resolveToolPolicy("search", "readonly").type).toBe("check");
+    expect(resolveToolPolicy("lsp", "readonly").type).toBe("check");
+    expect(resolveToolPolicy("browser", "readonly").type).toBe("check");
+    expect(resolveToolPolicy("task", "readonly").type).toBe("check");
   });
 
   test("readonly toolKey falls back to DEFAULT_POLICY for unknowns", () => {
@@ -123,12 +123,12 @@ describe("resolveToolPolicy", () => {
     expect(resolveToolPolicy("debug", "debug").type).toBe("allow");
   });
 
-  test("debug toolKey uses debug_bash_check for bash", () => {
-    expect(resolveToolPolicy("bash", "debug").type).toBe("debug_bash_check");
+  test("debug toolKey uses check for bash", () => {
+    expect(resolveToolPolicy("bash", "debug").type).toBe("check");
   });
 
-  test("debug toolKey uses debug_task_check for task", () => {
-    expect(resolveToolPolicy("task", "debug").type).toBe("debug_task_check");
+  test("debug toolKey uses check for task", () => {
+    expect(resolveToolPolicy("task", "debug").type).toBe("check");
   });
 
   test("debug toolKey allows search/find/ast_grep without scope check", () => {
@@ -145,7 +145,7 @@ describe("resolveToolPolicy", () => {
     expect(resolveToolPolicy("todo", "debug").type).toBe("allow");
     expect(resolveToolPolicy("resolve", "debug").type).toBe("allow");
     // lsp — inherited from readonly baseline, not overridden in DEBUG_TOOL_POLICIES
-    expect(resolveToolPolicy("lsp", "debug").type).toBe("lsp_check");
+    expect(resolveToolPolicy("lsp", "debug").type).toBe("check");
   });
 });
 
@@ -325,10 +325,10 @@ describe("ModeState.resolveToolPolicy", () => {
     expect(m.resolveToolPolicy("write").type).toBe("allow");
   });
 
-  test("debug mode uses debug_bash_check", () => {
+  test("debug mode uses check for bash", () => {
     const m = new ModeState();
     m.current = "debug";
-    expect(m.resolveToolPolicy("bash").type).toBe("debug_bash_check");
+    expect(m.resolveToolPolicy("bash").type).toBe("check");
   });
 });
 
