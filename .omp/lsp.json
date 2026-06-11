@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "typescript-language-server": {
+      "command": "E:/Developer/myhub/chat-agent/src/main/frontend/node_modules/.bin/typescript-language-server.cmd",
+      "args": ["--stdio"],
+      "rootMarkers": ["tsconfig.json"]
+    }
+  }
+}
