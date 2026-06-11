@@ -170,18 +170,17 @@ describe("ModeState.beginTurn", () => {
     expect(injection).toBeNull();
   });
 
-  test("debug mode re-injects after reinjectAfter turns (reinjectAfter=3)", () => {
+  test("debug mode injects message every turn (message_every_turn)", () => {
     const m = new ModeState();
     m.current = "debug";
     m.scopePaths = ["all"];
-    m.beginTurn(cwd); // turn 1: injects (transition)
-    m.beginTurn(cwd); // turn 2: no inject
-    m.beginTurn(cwd); // turn 3: no inject
-    m.beginTurn(cwd); // turn 4: no inject
-    // turn 5: _turns=3 >= reinjectAfter=3 → re-injects
-    const injection = m.beginTurn(cwd);
-    expect(injection).not.toBeNull();
-    expect(injection!.content).toContain("DEBUG MODE");
+    const inj1 = m.beginTurn(cwd);
+    const inj2 = m.beginTurn(cwd);
+    const inj3 = m.beginTurn(cwd);
+    expect(inj1!.kind).toBe("message");
+    expect(inj2!.kind).toBe("message");
+    expect(inj3!.kind).toBe("message");
+    expect(inj1!.content).toContain("DEBUG MODE");
   });
 
   test("chat mode injects system_prompt every turn", () => {
@@ -219,16 +218,6 @@ describe("ModeState.beginTurn", () => {
     expect(injection!.content).toContain("/other/project");
   });
 
-  test("debug mode injects message on transition", () => {
-    const m = new ModeState();
-    m.current = "debug";
-    m.scopePaths = ["all"];
-    const injection = m.beginTurn(cwd);
-    expect(injection).not.toBeNull();
-    expect(injection!.kind).toBe("message");
-    expect(injection!.content).toContain("DEBUG MODE");
-  });
-
   test("mode switch triggers injection even for message_on_transition", () => {
     const m = new ModeState();
     m.beginTurn(cwd); // build turn 1: injects
@@ -252,11 +241,11 @@ describe("ModeState.beginTurn", () => {
     expect(injection!.content).toContain("/new/path");
   });
 
-  test("null is returned when no injection needed", () => {
+  test("null is returned when no injection needed (build, after transition)", () => {
     const m = new ModeState();
-    m.current = "debug";
-    m.beginTurn(cwd); // injects on transition
-    const injection = m.beginTurn(cwd); // no transition, turns=1 < reinjectAfter=3
+    m.current = "build";
+    m.beginTurn(cwd); // turn 1: injects (transition from undefined→build)
+    const injection = m.beginTurn(cwd); // turn 2: no transition, reinjectAfter=0 → null
     expect(injection).toBeNull();
   });
 });

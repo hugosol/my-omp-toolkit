@@ -86,7 +86,7 @@ export const MODES: Record<ModeName, ModeDef> = {
     label:      "Debug",
     color:      "\x1b[33m",
     customType: "debug-mode-context",
-    injection:  { kind: "message_on_transition", reinjectAfter: 3 },
+    injection:  { kind: "message_every_turn" },
     scopeKind:  "all",
     toolKey:    "debug",
   },
