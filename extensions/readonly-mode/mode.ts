@@ -109,6 +109,7 @@ export function buildScope(
     case "workspace":
       return getAllowedScope(cwd, []);
     case "paths":
+      if (scopePaths.includes("all")) return ["all"];
       return getAllowedScope(cwd, scopePaths);
   }
 }
@@ -130,10 +131,11 @@ export function buildPromptContent(
     case "chat":
       return CHAT_SYSTEM_PROMPT + scopeFooter();
     case "explore": {
-      const desc = scopePaths.includes("all")
+      const isAll = scopePaths.includes("all");
+      const desc = isAll
         ? "all directories (including workspace and ~/.omp/agent)"
         : `workspace + ${scopePaths.join(", ")} (and ~/.omp/agent)`;
-      return exploreSystemPrompt(desc) + scopeFooter();
+      return exploreSystemPrompt(desc) + (isAll ? "" : scopeFooter());
     }
   }
 }

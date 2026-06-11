@@ -75,6 +75,10 @@ describe("buildScope", () => {
     // OS-independent check: extra path contains its basename components
     expect(scope.some(s => s.includes("lib") && s.includes("external"))).toBe(true);
   });
+
+  test("'paths' kind with 'all' in scopePaths returns sentinel", () => {
+    expect(buildScope(cwd, "paths", ["all"])).toEqual(["all"]);
+  });
 });
 
 // ============================================================
@@ -357,6 +361,14 @@ describe("ModeState.getScope", () => {
     expect(scope.some(s => s.includes("lib") && s.includes("other"))).toBe(true);
   });
 
+  test("explore mode with 'all' scopePaths returns all sentinel", () => {
+    const m = new ModeState();
+    m.current = "explore";
+    m.scopePaths = ["all"];
+    const scope = m.getScope(cwd);
+    expect(scope).toEqual(["all"]);
+  });
+
   test("debug mode returns all sentinel", () => {
     const m = new ModeState();
     m.current = "debug";
@@ -389,9 +401,10 @@ describe("buildPromptContent", () => {
     expect(content).toContain("Allowed search paths");
   });
 
-  test("explore mode with all shows expanded scope", () => {
+  test("explore mode with all shows expanded scope without path footer", () => {
     const content = buildPromptContent("explore", ["all"], cwd);
     expect(content).toContain("EXPLORE MODE");
     expect(content).toContain("all directories");
+    expect(content).not.toContain("Allowed search paths");
   });
 });

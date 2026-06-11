@@ -52,11 +52,9 @@ describe("getAllowedScope", () => {
     }
   });
 
-  test("does not expand scopeOverride paths when 'all' is present", () => {
+  test("returns sentinel when 'all' is in scopeOverride", () => {
     const scope = getAllowedScope(cwd, ["all"]);
-    // 'all' should be the only override
-    expect(scope.length).toBeGreaterThanOrEqual(2); // cwd + ~/.omp/agent
-    // No non-standard paths added beyond cwd and ~/.omp/agent
+    expect(scope).toEqual(["all"]);
   });
 
   test("adds scopeOverride paths to scope", () => {

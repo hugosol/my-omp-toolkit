@@ -12,16 +12,15 @@ export function resolvePath(p: string, cwd: string): string {
 
 /** Compute the current set of allowed scope directories. */
 export function getAllowedScope(cwd: string, scopeOverride: string[]): string[] {
+  if (scopeOverride.includes("all")) return ["all"];
   const scope: string[] = [];
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
   if (homeDir) {
     scope.push(path.resolve(homeDir, ".omp", "agent"));
   }
   scope.push(cwd);
-  if (!scopeOverride.includes("all")) {
-    for (const p of scopeOverride) {
-      scope.push(resolvePath(p, cwd));
-    }
+  for (const p of scopeOverride) {
+    scope.push(resolvePath(p, cwd));
   }
   return scope;
 }
