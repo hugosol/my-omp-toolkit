@@ -20,15 +20,33 @@ function isReadonlyAuditTool(tool: string): boolean {
   return tool === "read" || tool === "web_search" || tool === "ask" || tool === "todo" || tool === "resolve";
 }
 
+/** Extract unique file paths from hashline [PATH#TAG] headers in an input string. */
+function extractHashlinePaths(input: string): string[] {
+  const paths = new Set<string>();
+  for (const m of input.matchAll(/^\[([^#\r\n]+)#/gm)) {
+    paths.add(m[1]);
+  }
+  return [...paths];
+}
+
 /** Extract a human-readable detail string from tool input. */
 function auditDetail(tool: string, input: unknown): string {
   const inp = input as Record<string, unknown> | undefined;
   if (!inp) return "";
   switch (tool) {
     case "write":
-    case "edit":
+      return (inp.path as string) ?? "";
+    case "edit": {
+      if (typeof inp.path === "string") return inp.path;
+      if (typeof inp.input === "string") {
+        const paths = extractHashlinePaths(inp.input);
+        return paths.join(", ") || "";
+      }
+      return "";
+    }
     case "ast_edit":
-      return (inp.path as string) ?? (inp.filePath as string) ?? "";
+      if (Array.isArray(inp.paths)) return (inp.paths as string[]).join(", ");
+      return "";
     case "bash":
       return (inp.command as string)?.slice(0, 80) ?? "";
     case "eval":
