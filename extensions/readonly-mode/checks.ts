@@ -8,6 +8,8 @@ import {
   BASH_BLOCKED_TEE,
   READONLY_TASK_AGENTS,
   HAS_ALTERNATIVE_AGENTS,
+  DEBUG_BASH_BLOCKED,
+  DEBUG_TASK_AGENTS,
 } from "./policies";
 import { getAllowedScope, isPathInScope, buildScopeGuide } from "./scope";
 
@@ -160,5 +162,72 @@ export function checkTask(event: { input: unknown }): BlockResult | undefined {
     block: true,
     reason: `Agent '${agent}' can write files.`,
     hint: "switch_to_build",
+  };
+}
+
+// ============================================================
+// Debug mode check functions
+// ============================================================
+
+export function checkDebugBash(event: { input: unknown }): BlockResult | undefined {
+  const input = event.input as { command?: string };
+  const command = (input.command ?? "").trim();
+  if (!command) return { block: true, reason: "Empty bash command.", hint: "silent" };
+
+  // 1. Block command chaining
+  if (BASH_BLOCKED_CHAIN.test(command)) {
+    return {
+      block: true,
+      reason: "Command chaining (&&, ||, ;, \`, $()) is not allowed in Debug mode.",
+      hint: "use_alternative",
+      alternatives: ["Run one command at a time"],
+    };
+  }
+
+  // 2. Block output redirection
+  if (BASH_BLOCKED_REDIRECT.test(command) || BASH_BLOCKED_TEE.test(command)) {
+    return {
+      block: true,
+      reason: "Output redirection (>, >>, &>, | tee) is not allowed in Debug mode.",
+      hint: "use_alternative",
+      alternatives: ["Use the read or write tool instead"],
+    };
+  }
+
+  // 3. Block destructive commands
+  for (const pattern of DEBUG_BASH_BLOCKED) {
+    if (pattern.test(command)) {
+      return {
+        block: true,
+        reason: "Destructive command blocked in Debug mode.",
+        hint: "silent",
+      };
+    }
+  }
+
+  return undefined;
+}
+
+export function checkDebugTask(event: { input: unknown }): BlockResult | undefined {
+  const input = event.input as { agent?: string; tasks?: unknown[] };
+  const agent = input.agent;
+
+  if (!agent) {
+    return {
+      block: true,
+      reason: "Tool 'task' can spawn sub-agents.",
+      hint: "switch_to_build",
+    };
+  }
+
+  if (DEBUG_TASK_AGENTS.has(agent)) {
+    return undefined;
+  }
+
+  return {
+    block: true,
+    reason: `Agent '${agent}' can write files. Debug mode allows: ${[...DEBUG_TASK_AGENTS].join(", ")}.`,
+    hint: "use_alternative",
+    alternatives: ["Use `explore` for investigation", "Use `oracle` for analysis"],
   };
 }

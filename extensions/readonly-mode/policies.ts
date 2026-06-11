@@ -60,8 +60,37 @@ export const ECO_READONLY_PATTERN = new RegExp(
 // Blocked patterns: command chaining
 export const BASH_BLOCKED_CHAIN = /&&|\|\||;\s*\S|`|\$\(/;
 // Blocked patterns: output redirection
-export const BASH_BLOCKED_REDIRECT = /[>&]+\s*(?:>>?)/;
+export const BASH_BLOCKED_REDIRECT = /\s[>&]+\s*[^>&\s]/;
 export const BASH_BLOCKED_TEE = /\|\s*tee\b/;
+
+// ============================================================
+// Debug mode — destructive bash patterns (core protection)
+// ============================================================
+
+/** Patterns that are blocked in Debug mode — destructive operations only. */
+export const DEBUG_BASH_BLOCKED: RegExp[] = [
+  // File/directory destruction
+  /^(?:\s*sudo\s+)?rm\b/,
+  /^(?:\s*sudo\s+)?rmdir\b/,
+  /^(?:\s*sudo\s+)?mv\b/,
+  /^(?:\s*sudo\s+)?mkdir\b/,
+  /^(?:\s*sudo\s+)?touch\b/,
+  /^(?:\s*sudo\s+)?chmod\b/,
+  /^(?:\s*sudo\s+)?chown\b/,
+  /^(?:\s*sudo\s+)?chgrp\b/,
+  /^(?:\s*sudo\s+)?truncate\b/,
+  /^(?:\s*sudo\s+)?dd\b/,
+  /^(?:\s*sudo\s+)?shred\b/,
+  /^(?:\s*sudo\s+)?ln\b/,
+  /^(?:\s*sudo\s+)?cp\b/,
+  // Git destructive subcommands
+  /^(?:\s*sudo\s+)?git\s+(?:push|commit|merge|rebase|reset\s+--hard|tag\s+-d|checkout\s+-b|branch\s+-D|stash\s+drop|stash\s+clear)\b/,
+  // In-place editing
+  /^(?:\s*sudo\s+)?sed\b.*-i\b/,
+  // Package management (install / remove deps changes the project)
+  /^(?:\s*sudo\s+)?(?:npm|yarn|pnpm|pip|pip3|apt|apt-get|brew|cargo)\s+(?:install|uninstall|update|upgrade|remove|purge|add|publish|ci)\b/,
+];
+
 
 // ============================================================
 // Task agent whitelist — agents allowed in read-only mode
@@ -83,10 +112,23 @@ export const HAS_ALTERNATIVE_AGENTS = new Set([
 ]);
 
 // ============================================================
+// Debug-mode task agent whitelist
+// ============================================================
+
+/** Agents allowed in Debug mode. Adds oracle for reasoning/analysis. */
+export const DEBUG_TASK_AGENTS = new Set([
+  "explore",
+  "librarian",
+  "plan",
+  "reviewer",
+  "oracle",
+]);
+
+// ============================================================
 // Tool policies (declarative)
 // ============================================================
 
-export type PolicyType = "allow" | "block" | "path_check" | "bash_check" | "lsp_check" | "browser_check" | "task_check";
+export type PolicyType = "allow" | "block" | "path_check" | "bash_check" | "lsp_check" | "browser_check" | "task_check" | "debug_bash_check" | "debug_task_check";
 
 export type BlockHint = "switch_to_build" | "use_alternative" | "silent";
 
@@ -127,6 +169,33 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
   bash:     { type: "bash_check" },
   lsp:      { type: "lsp_check" },
   browser:  { type: "browser_check" },
+};
+
+// ============================================================
+// Debug mode tool policies — overrides for expanded access
+// ============================================================
+
+export const DEBUG_TOOL_POLICIES: Record<string, ToolPolicy> = {
+  // Allow write/edit for temporary instrumentation (prompt-level constraint)
+  write:    { type: "allow" },
+  edit:     { type: "allow" },
+  ast_edit: { type: "allow" },
+  eval:     { type: "allow" },
+  debug:    { type: "allow" },
+
+  // Bash: core protection against destructive ops
+  bash:     { type: "debug_bash_check" },
+
+  // Task: expanded whitelist (oracle added)
+  task:     { type: "debug_task_check" },
+
+  // Browser: allow run for simulating user operations
+  browser:  { type: "allow" },
+
+  // Scope: all paths allowed, no path checking needed
+  search:   { type: "allow" },
+  find:     { type: "allow" },
+  ast_grep: { type: "allow" },
 };
 
 export const DEFAULT_POLICY: ToolPolicy = {

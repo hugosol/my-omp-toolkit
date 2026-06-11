@@ -8,6 +8,7 @@
 //   "message_on_transition" – invisible message only on mode switch (in history, minimal tokens)
 export const BUILD_PROMPT_LOCATION: "system_prompt" | "message_every_turn" | "message_on_transition" = "message_on_transition";
 export const READONLY_PROMPT_LOCATION: "system_prompt" | "message_every_turn" | "message_on_transition" = "system_prompt";
+export const DEBUG_PROMPT_LOCATION: "system_prompt" | "message_every_turn" | "message_on_transition" = "message_on_transition";
 
 // When using "message_on_transition": re-inject after N same-mode turns to refresh
 // model attention during long conversations. 0 = never re-inject.
@@ -29,9 +30,11 @@ You are in Build mode with full access. No tool restrictions apply.`;
 // not repeating the full system prompt.
 export const CHAT_TRANSITION_PROMPT = `[CHAT MODE ACTIVE]
 You have switched to Chat mode. Write and execute tools are now blocked.`;
-
 export const EXPLORE_TRANSITION_PROMPT = `[EXPLORE MODE ACTIVE]
 You have switched to Explore mode. Write and execute tools are now blocked.`;
+
+export const DEBUG_TRANSITION_PROMPT = `[DEBUG MODE ACTIVE]
+You are in Debug mode with expanded access for investigation. You can read all files, run tests and diagnostic commands, add temporary instrumentation (logging, debug prints), and simulate user operations via browser. Permanent code changes are NOT permitted — when you've identified the root cause and a fix approach, discuss it with the user. They will switch back to Build mode for implementation.`;
 
 export const CHAT_SYSTEM_PROMPT = `[CHAT MODE ACTIVE]
 You are in Chat mode (read-only, workspace-scoped). You can read, search, and analyze the codebase within the workspace, but write or execute operations are blocked by the system.

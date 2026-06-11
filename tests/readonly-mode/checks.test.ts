@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { checkBash, checkSearchPaths, checkLsp, checkBrowser, checkTask } from "../../extensions/readonly-mode/checks.ts";
+import { checkBash, checkDebugBash, checkSearchPaths, checkLsp, checkBrowser, checkTask, checkDebugTask } from "../../extensions/readonly-mode/checks.ts";
 
 // ============================================================
 // checkBash
@@ -265,5 +265,126 @@ describe("checkTask", () => {
     expect(result).toBeDefined();
     expect(result!.hint).toBe("switch_to_build");
     expect(result!.reason).toContain("oracle");
+  });
+});
+
+// ============================================================
+// checkDebugBash — Debug mode core protection
+// ============================================================
+
+describe("checkDebugBash", () => {
+  test("allows test and diagnostic commands", () => {
+    const allowed = [
+      "bun test",
+      "npm test",
+      "npx vitest",
+      "cargo test",
+      "pytest",
+      "go test ./...",
+      "tsc --noEmit",
+      "cargo check",
+      "eslint .",
+      "npm run test",
+      "npx jest --coverage",
+      "python -m pytest -v",
+    ];
+    for (const cmd of allowed) {
+      expect(checkDebugBash({ input: { command: cmd } })).toBeUndefined();
+    }
+  });
+
+  test("allows read-only commands", () => {
+    const allowed = ["ls", "cat file.txt", "grep pattern file", "pwd", "git log", "git diff", "npm ls"];
+    for (const cmd of allowed) {
+      expect(checkDebugBash({ input: { command: cmd } })).toBeUndefined();
+    }
+  });
+
+  test("blocks destructive file commands", () => {
+    const blocked = ["rm file.txt", "rm -rf dir", "sudo rm -rf /", "rmdir dir", "mv a b", "mkdir dir", "touch file", "chmod 777 file", "chown user file", "truncate -s 0 file"];
+    for (const cmd of blocked) {
+      const result = checkDebugBash({ input: { command: cmd } });
+      expect(result).toBeDefined();
+      expect(result!.reason).toContain("Destructive");
+    }
+  });
+
+  test("blocks destructive git commands", () => {
+    const blocked = ["git push", "git commit -m 'x'", "git merge main", "git rebase main", "git reset --hard HEAD~1", "git branch -D feature", "sudo git push"];
+    for (const cmd of blocked) {
+      const result = checkDebugBash({ input: { command: cmd } });
+      expect(result).toBeDefined();
+    }
+  });
+
+  test("allows read-only git commands", () => {
+    const allowed = ["git log", "git diff", "git status", "git show HEAD", "git branch", "git stash list"];
+    for (const cmd of allowed) {
+      expect(checkDebugBash({ input: { command: cmd } })).toBeUndefined();
+    }
+  });
+
+  test("blocks command chaining", () => {
+    const result = checkDebugBash({ input: { command: "ls && rm file" } });
+    expect(result).toBeDefined();
+    expect(result!.reason).toContain("chaining");
+  });
+
+  test("blocks output redirection", () => {
+    expect(checkDebugBash({ input: { command: "ls > out.txt" } })).toBeDefined();
+    expect(checkDebugBash({ input: { command: "echo x >> log" } })).toBeDefined();
+    expect(checkDebugBash({ input: { command: "cat file | tee log" } })).toBeDefined();
+  });
+
+  test("blocks sed -i", () => {
+    const result = checkDebugBash({ input: { command: "sed -i 's/a/b/' file" } });
+    expect(result).toBeDefined();
+    expect(result!.reason).toContain("Destructive");
+  });
+
+  test("blocks package install commands", () => {
+    const blocked = ["npm install pkg", "npm uninstall pkg", "pip install pkg", "cargo install tool", "brew install pkg", "apt install pkg"];
+    for (const cmd of blocked) {
+      const result = checkDebugBash({ input: { command: cmd } });
+      expect(result).toBeDefined();
+    }
+  });
+});
+
+// ============================================================
+// checkDebugTask — Debug mode agent whitelist
+// ============================================================
+
+describe("checkDebugTask", () => {
+  test("allows readonly agents", () => {
+    const allowed = ["explore", "librarian", "plan", "reviewer"];
+    for (const agent of allowed) {
+      expect(checkDebugTask({ input: { agent } })).toBeUndefined();
+    }
+  });
+
+  test("allows oracle", () => {
+    expect(checkDebugTask({ input: { agent: "oracle" } })).toBeUndefined();
+  });
+
+  test("blocks task and quick_task", () => {
+    const blocked = ["task", "quick_task"];
+    for (const agent of blocked) {
+      const result = checkDebugTask({ input: { agent } });
+      expect(result).toBeDefined();
+      expect(result!.hint).toBe("use_alternative");
+    }
+  });
+
+  test("blocks unknown agents", () => {
+    const result = checkDebugTask({ input: { agent: "designer" } });
+    expect(result).toBeDefined();
+    expect(result!.reason).toContain("designer");
+  });
+
+  test("blocks missing agent", () => {
+    const result = checkDebugTask({ input: {} });
+    expect(result).toBeDefined();
+    expect(result!.hint).toBe("switch_to_build");
   });
 });

@@ -1,47 +1,91 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
-import { TOOL_POLICIES, DEFAULT_POLICY, formatBlock } from "./policies";
+import { TOOL_POLICIES, DEBUG_TOOL_POLICIES, DEFAULT_POLICY, formatBlock } from "./policies";
 import type { BlockResult } from "./policies";
 
-import { checkBash, checkSearchPaths, checkLsp, checkBrowser, checkTask } from "./checks";
+import { checkBash, checkDebugBash, checkSearchPaths, checkLsp, checkBrowser, checkTask, checkDebugTask } from "./checks";
 
 import {
   BUILD_PROMPT_LOCATION,
   READONLY_PROMPT_LOCATION,
+  DEBUG_PROMPT_LOCATION,
   REINJECT_INTERVAL,
   CLEANUP_HISTORY,
   BUILD_SYSTEM_PROMPT,
   CHAT_SYSTEM_PROMPT,
   CHAT_TRANSITION_PROMPT,
   EXPLORE_TRANSITION_PROMPT,
+  DEBUG_TRANSITION_PROMPT,
   exploreSystemPrompt,
 } from "./prompts";
 
 import { getAllowedScope, buildScopeGuide } from "./scope";
+
+import { recordAudit, clearAudit, toggleAudit, showCollapsed, setAuditCtx } from "./audit";
+
+// ============================================================
+// Audit helpers
+// ============================================================
+
+/** Tools that don't produce meaningful audit entries. */
+function isReadonlyAuditTool(tool: string): boolean {
+  return tool === "read" || tool === "web_search" || tool === "ask" || tool === "todo" || tool === "resolve";
+}
+
+/** Extract a human-readable detail string from tool input. */
+function auditDetail(tool: string, input: unknown): string {
+  const inp = input as Record<string, unknown> | undefined;
+  if (!inp) return "";
+  switch (tool) {
+    case "write":
+    case "edit":
+    case "ast_edit":
+      return (inp.path as string) ?? (inp.filePath as string) ?? "";
+    case "bash":
+      return (inp.command as string)?.slice(0, 80) ?? "";
+    case "eval":
+      return (inp.code as string)?.split("\n")[0]?.slice(0, 60) ?? "";
+    case "browser":
+      return `${inp.action ?? ""} ${inp.url ?? ""}`.trim().slice(0, 60);
+    case "debug":
+      return `${inp.action ?? ""} ${inp.program ?? ""}`.trim().slice(0, 60);
+    case "task":
+      return `agent: ${inp.agent ?? "?"} — ${((inp.assignment as string) ?? "").slice(0, 50)}`;
+    case "lsp":
+      return `${inp.action ?? ""} ${(inp.file as string) ?? ""}`.trim().slice(0, 60);
+    default:
+      return "";
+  }
+}
 
 // ============================================================
 // Main extension
 // ============================================================
 
 export default function readonlyMode(pi: ExtensionAPI) {
-  const state = { enabled: false, scopeOverride: [] as string[], previousEnabled: undefined as boolean | undefined, previousScopeOverride: undefined as string[] | undefined, turnsSinceTransition: 0 };
+  const state = { enabled: false, debugMode: false, scopeOverride: [] as string[], previousEnabled: undefined as boolean | undefined, previousDebugMode: undefined as boolean | undefined, previousScopeOverride: undefined as string[] | undefined, turnsSinceTransition: 0 };
 
   function updateState(ctx: ExtensionContext, patch: Partial<typeof state>): void {
     Object.assign(state, patch);
-    setWidget(ctx, state.enabled, state.scopeOverride);
+    setWidget(ctx);
+    setAuditCtx(ctx);
+    if (!state.debugMode) showCollapsed();
   }
 
   pi.setLabel("Read-only Mode");
 
-  function setWidget(ctx: ExtensionContext, on: boolean, override: string[]): void {
+  function setWidget(ctx: ExtensionContext): void {
     let label: string;
     let color: string;
 
-    if (!on) {
+    if (state.debugMode) {
+      label = "Debug";
+      color = "\x1b[33m";
+    } else if (!state.enabled) {
       label = "Build";
       color = "\x1b[34m";
-    } else if (override.length > 0) {
-      const display = override.includes("all") ? "all" : override.join(", ");
+    } else if (state.scopeOverride.length > 0) {
+      const display = state.scopeOverride.includes("all") ? "all" : state.scopeOverride.join(", ");
       label = `Explore: ${display}`;
       color = "\x1b[32m";
     } else {
@@ -58,23 +102,40 @@ export default function readonlyMode(pi: ExtensionAPI) {
 
   // Default state: Build (read-write)
   pi.on("session_start", async (_event, ctx) => {
-    updateState(ctx, { enabled: false, scopeOverride: [] });
+    updateState(ctx, { enabled: false, debugMode: false, scopeOverride: [] });
   });
-
-  // Slash command: /readonly, /readonly all, /readonly <path...>, /readonly add <path>, /readonly remove <path>, /readonly clear
   pi.registerCommand("readonly", {
-    description: "Toggle read-only mode. /readonly all: allow all paths. /readonly <paths...>: allow specific paths. /readonly add <p> / remove <p> / clear.",
+    description: "Toggle read-only mode. /readonly debug: enter Debug mode. /readonly audit: toggle audit trail. /readonly all: allow all paths. /readonly <paths...>: allow specific paths.",
     handler: async (args, ctx) => {
       const arg = args.trim();
       const argLower = arg.toLowerCase();
 
+      if (argLower === "debug") {
+        updateState(ctx, { enabled: true, debugMode: true, scopeOverride: ["all"] });
+        ctx.ui.notify("\x1b[33mDebug mode on — expanded read/execute, write OK for instrumentation\x1b[0m", "info");
+        return;
+      }
+
+      if (argLower === "audit") {
+        if (!state.debugMode) {
+          ctx.ui.notify("Audit trail is only available in Debug mode. Use /readonly debug first.", "warning");
+          return;
+        }
+        toggleAudit(ctx);
+        return;
+      }
+
       if (!arg) {
-        // Toggle: preserve overrides when turning back on
-        updateState(ctx, { enabled: !state.enabled });
+        // Toggle: Debug → Build, Build → Chat, Chat → Build, Explore → Build
+        if (state.debugMode) {
+          updateState(ctx, { enabled: false, debugMode: false });
+        } else {
+          updateState(ctx, { enabled: !state.enabled });
+        }
       } else if (argLower === "all") {
-        updateState(ctx, { enabled: true, scopeOverride: ["all"] });
+        updateState(ctx, { enabled: true, debugMode: false, scopeOverride: ["all"] });
       } else if (argLower === "clear") {
-        updateState(ctx, { enabled: true, scopeOverride: [] });
+        updateState(ctx, { enabled: true, debugMode: false, scopeOverride: [] });
       } else if (argLower.startsWith("add ")) {
         const toAdd = arg.slice(4).trim();
         if (!toAdd) {
@@ -82,7 +143,7 @@ export default function readonlyMode(pi: ExtensionAPI) {
           return;
         }
         const updated = [...state.scopeOverride.filter(p => p !== "all"), toAdd];
-        updateState(ctx, { enabled: true, scopeOverride: updated });
+        updateState(ctx, { enabled: true, debugMode: false, scopeOverride: updated });
       } else if (argLower.startsWith("remove ")) {
         const toRemove = arg.slice(7).trim();
         if (!toRemove) {
@@ -90,43 +151,64 @@ export default function readonlyMode(pi: ExtensionAPI) {
           return;
         }
         const updated = state.scopeOverride.filter(p => p !== "all" && p !== toRemove);
-        updateState(ctx, { enabled: true, scopeOverride: updated });
+        updateState(ctx, { enabled: true, debugMode: false, scopeOverride: updated });
       } else {
         // Space-separated paths: replace existing overrides
         const paths = arg.split(/\s+/).filter(p => p.length > 0);
-        updateState(ctx, { enabled: true, scopeOverride: paths });
+        updateState(ctx, { enabled: true, debugMode: false, scopeOverride: paths });
       }
 
-      const notifyLabel = state.scopeOverride.includes("all") ? "all"
-        : state.scopeOverride.length > 0 ? state.scopeOverride.join(", ")
-        : "chat";
-      const color = !state.enabled
-        ? "\x1b[34m"
-        : state.scopeOverride.length > 0
-          ? "\x1b[32m"
-          : "\x1b[38;5;214m";
-      const label = !state.enabled
-        ? "Build mode on"
-        : state.scopeOverride.length > 0
-          ? `Explore mode on, scope: ${notifyLabel}`
-          : "Chat mode on";
-      ctx.ui.notify(`${color}${label}\x1b[0m`, "info");
+      let notifyLabel: string;
+      let color: string;
+      if (state.debugMode) {
+        notifyLabel = "Debug mode on";
+        color = "\x1b[33m";
+      } else if (!state.enabled) {
+        notifyLabel = "Build mode on";
+        color = "\x1b[34m";
+      } else if (state.scopeOverride.length > 0) {
+        const scopeLabel = state.scopeOverride.includes("all") ? "all" : state.scopeOverride.join(", ");
+        notifyLabel = `Explore mode on, scope: ${scopeLabel}`;
+        color = "\x1b[32m";
+      } else {
+        notifyLabel = "Chat mode on";
+        color = "\x1b[38;5;214m";
+      }
+      ctx.ui.notify(`${color}${notifyLabel}\x1b[0m`, "info");
     },
   });
 
   // Inject mode declaration per configuration
   pi.on("before_agent_start", async (event, ctx) => {
+    // Clear previous turn's audit entries (only agent turns, not commands)
+    if (state.debugMode) clearAudit();
     const prevKey = (state.previousScopeOverride ?? []).join("|");
     const currKey = state.scopeOverride.join("|");
-    const modeChanged = state.previousEnabled !== state.enabled || prevKey !== currKey;
+    const prevDebug = state.previousDebugMode ?? false;
+    const modeChanged = state.previousEnabled !== state.enabled
+      || prevDebug !== state.debugMode
+      || prevKey !== currKey;
 
-    const location = state.enabled ? READONLY_PROMPT_LOCATION : BUILD_PROMPT_LOCATION;
+    // Determine prompt location: Debug uses message_on_transition (same as Build)
+    // to keep system prompt stable for cache hits
+    let location: typeof BUILD_PROMPT_LOCATION;
+    if (state.debugMode) {
+      location = DEBUG_PROMPT_LOCATION;
+    } else if (state.enabled) {
+      location = READONLY_PROMPT_LOCATION;
+    } else {
+      location = BUILD_PROMPT_LOCATION;
+    }
 
     // Build the prompt content and custom type for the current mode
     let content: string;
     let customType: string;
-    if (!state.enabled) {
+    if (state.debugMode) {
+      content = DEBUG_TRANSITION_PROMPT;
+      customType = "debug-mode-context";
+    } else if (!state.enabled) {
       content = BUILD_SYSTEM_PROMPT;
+      customType = "build-mode-context";
     } else {
       const scope = getAllowedScope(ctx.cwd, state.scopeOverride);
       const paths = `\nAllowed search paths:\n${buildScopeGuide(scope)}`;
@@ -154,14 +236,17 @@ export default function readonlyMode(pi: ExtensionAPI) {
         shouldInject = true;
       }
     }
-    // When switching to readonly mode, also inject a brief transition
-    // message into conversation history so the model explicitly sees
-    // the mode change (mirrors BUILD_PROMPT_LOCATION="message_on_transition").
-    if (!shouldInject && modeChanged && state.enabled) {
+    // When switching to readonly/debug mode, also inject a brief transition
+    // message into conversation history.
+    if (!shouldInject && modeChanged && (state.enabled || state.debugMode)) {
       shouldInject = true;
-      injectContent = state.scopeOverride.length > 0
-        ? EXPLORE_TRANSITION_PROMPT
-        : CHAT_TRANSITION_PROMPT;
+      if (state.debugMode) {
+        injectContent = DEBUG_TRANSITION_PROMPT;
+      } else {
+        injectContent = state.scopeOverride.length > 0
+          ? EXPLORE_TRANSITION_PROMPT
+          : CHAT_TRANSITION_PROMPT;
+      }
     }
 
     // Update tracking
@@ -171,6 +256,7 @@ export default function readonlyMode(pi: ExtensionAPI) {
       state.turnsSinceTransition++;
     }
     state.previousEnabled = state.enabled;
+    state.previousDebugMode = state.debugMode;
     state.previousScopeOverride = [...state.scopeOverride];
 
     if (!shouldInject && location !== "system_prompt") return;
@@ -187,9 +273,10 @@ export default function readonlyMode(pi: ExtensionAPI) {
 
   // Conditionally filter stale mode-context messages from history
   if (CLEANUP_HISTORY) {
-    const MODE_TYPES = ["build-mode-context", "chat-mode-context", "explore-mode-context"];
+    const MODE_TYPES = ["build-mode-context", "chat-mode-context", "explore-mode-context", "debug-mode-context"];
     pi.on("context", async event => {
-      const current = !state.enabled ? "build-mode-context"
+      const current = state.debugMode ? "debug-mode-context"
+        : !state.enabled ? "build-mode-context"
         : state.scopeOverride.length > 0 ? "explore-mode-context" : "chat-mode-context";
       return {
         messages: event.messages.filter(m =>
@@ -201,15 +288,20 @@ export default function readonlyMode(pi: ExtensionAPI) {
 
   // Unified tool call interception
   pi.on("tool_call", async (event, ctx) => {
-    if (!state.enabled) return;
+    // Build mode: no interception
+    if (!state.enabled && !state.debugMode) return;
 
-    const policy = TOOL_POLICIES[event.toolName] ?? DEFAULT_POLICY;
+    // Pick policy table based on mode
+    // Debug mode uses its own overrides first, falling back to readonly policies
+    const policy = (state.debugMode
+      ? (DEBUG_TOOL_POLICIES[event.toolName] ?? TOOL_POLICIES[event.toolName])
+      : TOOL_POLICIES[event.toolName]) ?? DEFAULT_POLICY;
 
     let raw: BlockResult | undefined;
 
     switch (policy.type) {
       case "allow":
-        return;
+        break;
 
       case "block":
         raw = {
@@ -222,6 +314,10 @@ export default function readonlyMode(pi: ExtensionAPI) {
 
       case "bash_check":
         raw = checkBash(event);
+        break;
+
+      case "debug_bash_check":
+        raw = checkDebugBash(event);
         break;
 
       case "path_check":
@@ -239,9 +335,19 @@ export default function readonlyMode(pi: ExtensionAPI) {
       case "task_check":
         raw = checkTask(event);
         break;
+
+      case "debug_task_check":
+        raw = checkDebugTask(event);
+        break;
+    }
+
+    // Record audit trail for allowed non-readonly tools in Debug mode
+    if (state.debugMode && !raw && !isReadonlyAuditTool(event.toolName)) {
+      recordAudit(event.toolName, auditDetail(event.toolName, event.input));
     }
 
     if (!raw) return;
     return formatBlock(raw);
   });
+
 }
