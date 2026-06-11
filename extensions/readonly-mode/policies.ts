@@ -139,7 +139,7 @@ export interface BlockResult {
   alternatives?: string[];
 }
 
-interface ToolPolicy {
+export interface ToolPolicy {
   type: PolicyType;
   reason?: string;
   hint?: BlockHint;

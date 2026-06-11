@@ -133,35 +133,38 @@ describe("checkBash", () => {
 
 describe("checkSearchPaths", () => {
   const cwd = "/home/user/project";
+  // Pre-resolve scope as ModeState.getScope(cwd) would — the new
+  // signature takes resolved scope, not raw scopeOverride.
+  const wsScope = ["/home/user/.omp/agent", "/home/user/project"];
 
   test("allows empty paths (default workspace search)", () => {
-    expect(checkSearchPaths({ input: {} }, cwd, [])).toBeUndefined();
-    expect(checkSearchPaths({ input: { paths: [] } }, cwd, [])).toBeUndefined();
+    expect(checkSearchPaths({ input: {} }, wsScope, cwd)).toBeUndefined();
+    expect(checkSearchPaths({ input: { paths: [] } }, wsScope, cwd)).toBeUndefined();
   });
 
-  test("allows when scopeOverride is 'all'", () => {
-    expect(checkSearchPaths({ input: { paths: "/etc/passwd" } }, cwd, ["all"])).toBeUndefined();
+  test("allows when scope is 'all'", () => {
+    expect(checkSearchPaths({ input: { paths: "/etc/passwd" } }, ["all"], cwd)).toBeUndefined();
   });
 
   test("allows paths within the workspace", () => {
-    expect(checkSearchPaths({ input: { paths: "src/main.ts" } }, cwd, [])).toBeUndefined();
-    expect(checkSearchPaths({ input: { paths: ["src/a.ts", "test/b.ts"] } }, cwd, [])).toBeUndefined();
+    expect(checkSearchPaths({ input: { paths: "src/main.ts" } }, wsScope, cwd)).toBeUndefined();
+    expect(checkSearchPaths({ input: { paths: ["src/a.ts", "test/b.ts"] } }, wsScope, cwd)).toBeUndefined();
   });
 
   test("allows paths that are internal URIs", () => {
-    expect(checkSearchPaths({ input: { paths: "skill://my-skill" } }, cwd, [])).toBeUndefined();
-    expect(checkSearchPaths({ input: { paths: "omp://config" } }, cwd, [])).toBeUndefined();
+    expect(checkSearchPaths({ input: { paths: "skill://my-skill" } }, wsScope, cwd)).toBeUndefined();
+    expect(checkSearchPaths({ input: { paths: "omp://config" } }, wsScope, cwd)).toBeUndefined();
   });
 
   test("blocks paths outside the workspace", () => {
-    const result = checkSearchPaths({ input: { paths: "/etc/passwd" } }, cwd, []);
+    const result = checkSearchPaths({ input: { paths: "/etc/passwd" } }, wsScope, cwd);
     expect(result).toBeDefined();
     expect(result!.reason).toContain("outside allowed scope");
     expect(result!.hint).toBe("use_alternative");
   });
 
   test("blocks when some paths are outside scope", () => {
-    const result = checkSearchPaths({ input: { paths: ["src/main.ts", "/etc/shadow"] } }, cwd, []);
+    const result = checkSearchPaths({ input: { paths: ["src/main.ts", "/etc/shadow"] } }, wsScope, cwd);
     expect(result).toBeDefined();
     expect(result!.reason).toContain("/etc/shadow");
   });

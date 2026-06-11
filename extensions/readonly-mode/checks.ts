@@ -11,7 +11,7 @@ import {
   DEBUG_BASH_BLOCKED,
   DEBUG_TASK_AGENTS,
 } from "./policies";
-import { getAllowedScope, isPathInScope, buildScopeGuide } from "./scope";
+import { isPathInScope, buildScopeGuide } from "./scope";
 
 // ============================================================
 // Tool check functions
@@ -66,8 +66,8 @@ export function checkBash(event: { input: unknown }): BlockResult | undefined {
 
 export function checkSearchPaths(
   event: { input: unknown },
+  scope: string[],
   cwd: string,
-  scopeOverride: string[],
 ): BlockResult | undefined {
   const input = event.input as { paths?: string | string[] };
   const paths = !input.paths ? [] : Array.isArray(input.paths) ? input.paths : [input.paths];
@@ -75,10 +75,9 @@ export function checkSearchPaths(
   // No paths specified → searches workspace root, always allowed
   if (paths.length === 0) return undefined;
 
-  // "all" scope → all paths allowed
-  if (scopeOverride.includes("all")) return undefined;
+  // "all" scope → all paths allowed (sentinel from ModeState.getScope)
+  if (scope[0] === "all") return undefined;
 
-  const scope = getAllowedScope(cwd, scopeOverride);
   const outOfScope = paths.filter((p) => !isPathInScope(p, scope, cwd));
   if (outOfScope.length === 0) return undefined;
 
