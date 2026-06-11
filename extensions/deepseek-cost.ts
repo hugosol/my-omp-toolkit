@@ -584,8 +584,8 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 	pi.on("session_tree", onInit);
 
 	// Clear turn summary when agent starts a new run
+	// Refresh context bar but keep previous turn stats visible until next agent_end
 	pi.on("agent_start", (_event, ctx) => {
-		turnDelta = null;
 		refresh(pi, ctx);
 	});
 
