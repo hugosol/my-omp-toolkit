@@ -52,7 +52,7 @@ edit 输入 → [src/foo.ts#9C3F]         ← 旧 tag，阻止
 /lock    → 关闭文件锁（状态栏清除）
 ```
 
-默认关闭，不影响 OMP 原生行为。开启后 edit、write 操作受锁保护。
+默认关闭，不影响 OMP 原生行为。开启后 `edit` 操作受锁保护；`write` 操作不依赖行号定位，不受锁限制，但成功执行后仍会标记文件为已修改（后续 `edit` 需要重新 `read`）。
 
 ## 覆盖范围
 
@@ -61,7 +61,7 @@ edit 输入 → [src/foo.ts#9C3F]         ← 旧 tag，阻止
 | edit（hashline） | ✅ | ✅ |
 | edit（replace） | ✅ | —（无 tag） |
 | edit（patch） | ✅ | —（无 tag） |
-| write | ✅ | —（无 tag） |
+| write | —（不依赖行号） | —（无 tag） |
 
 ## 局限性
 

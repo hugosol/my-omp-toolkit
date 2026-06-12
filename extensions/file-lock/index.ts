@@ -1,8 +1,8 @@
 /**
  * File Lock Extension — 编辑后必须重新 read 的硬守卫。
- *
  * 两层防护：
- *   1. 锁：read 授予编辑权 → edit/write 消费锁 → 再次 edit/write 被阻止
+ *   1. 锁：read 授予编辑权 → edit 消费锁 → 再次 edit 被阻止
+ *      write 不受锁守卫限制（不依赖行号），但成功后仍标记 edited: true
  *   2. Tag 校验（仅 hashline）：编辑中使用的 tag 必须与最近一次 read 的 tag 一致
  *
  * 默认关闭，通过 /lock 命令切换。开启后状态栏显示 "🔒 hardcore edit"。
@@ -86,13 +86,15 @@ function extractEditPaths(input: InputLike, toolName: string): string[] {
 
 interface ResultLike {
 	content?: Array<{ type: string; text?: string }>;
-	details?: { resolvedPath?: string };
+	details?: {
+		resolvedPath?: string;
+		meta?: { source?: { type?: string; value?: string } };
+	};
 }
 
 function extractReadTag(result: ResultLike): { absolutePath: string; tag: string } | null {
-	const resolvedPath = result.details?.resolvedPath;
+	const resolvedPath = result.details?.meta?.source?.value ?? result.details?.resolvedPath;
 	if (typeof resolvedPath !== "string") return null;
-
 	const textContent = result.content?.find(c => c.type === "text");
 	if (!textContent?.text) return null;
 
@@ -146,6 +148,11 @@ export default function fileLock(pi: ExtensionAPI): void {
 		if (!enabled) return;
 
 		const toolName = event.toolName;
+
+		// write 不使用 hashline 行号定位，无需读取前置守卫
+		// 但成功的 write 仍通过 tool_result 标记 edited: true（防后续 hashline 编辑的陈旧行号）
+		if (toolName === "write") return;
+
 		if (!editTools.has(toolName)) return;
 
 		const input = event.input as Record<string, unknown>;
