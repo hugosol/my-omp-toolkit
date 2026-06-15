@@ -89,19 +89,17 @@ export default function readonlyMode(pi: ExtensionAPI) {
   // Default state: Build (read-write)
   pi.on("session_start", async (_event, ctx) => {
     mode.current = "build";
-    mode.scopePaths = [];
     applyWidget(ctx);
   });
 
   pi.registerCommand("readonly", {
-    description: "Toggle read-only mode. /readonly debug: enter Debug mode. /readonly audit: toggle audit trail. /readonly all: allow all paths. /readonly <paths...>: allow specific paths.",
+    description: "Toggle read-only mode. /readonly debug: enter Debug mode. /readonly audit: toggle audit trail.",
     handler: async (args, ctx) => {
       const arg = args.trim();
       const argLower = arg.toLowerCase();
 
       if (argLower === "debug") {
         mode.current = "debug";
-        mode.scopePaths = ["all"];
         applyWidget(ctx);
         ctx.ui.notify("\x1b[33mDebug mode on — expanded read/execute, write OK for instrumentation\x1b[0m", "info");
         return;
@@ -116,49 +114,13 @@ export default function readonlyMode(pi: ExtensionAPI) {
         return;
       }
 
-      if (!arg) {
-        // Toggle: debug/chat/explore → build; build → chat
-        if (mode.current === "build") {
-          mode.current = "chat";
-          mode.scopePaths = [];
-        } else {
-          mode.current = "build";
-          mode.scopePaths = [];
-        }
-        applyWidget(ctx);
-      } else if (argLower === "all") {
+      // Toggle: build ↔ explore; any non-build → build
+      if (mode.current === "build") {
         mode.current = "explore";
-        mode.scopePaths = ["all"];
-        applyWidget(ctx);
-      } else if (argLower === "clear") {
-        mode.current = "chat";
-        mode.scopePaths = [];
-        applyWidget(ctx);
-      } else if (argLower.startsWith("add ")) {
-        const toAdd = arg.slice(4).trim();
-        if (!toAdd) {
-          ctx.ui.notify("Usage: /readonly add <path>", "error");
-          return;
-        }
-        mode.scopePaths = [...mode.scopePaths.filter(p => p !== "all"), toAdd];
-        mode.current = "explore";
-        applyWidget(ctx);
-      } else if (argLower.startsWith("remove ")) {
-        const toRemove = arg.slice(7).trim();
-        if (!toRemove) {
-          ctx.ui.notify("Usage: /readonly remove <path>", "error");
-          return;
-        }
-        mode.scopePaths = mode.scopePaths.filter(p => p !== "all" && p !== toRemove);
-        mode.current = "explore";
-        applyWidget(ctx);
       } else {
-        // Space-separated paths: replace existing overrides
-        const paths = arg.split(/\s+/).filter(p => p.length > 0);
-        mode.current = "explore";
-        mode.scopePaths = paths;
-        applyWidget(ctx);
+        mode.current = "build";
       }
+      applyWidget(ctx);
 
       ctx.ui.notify(`${mode.def.color}${mode.label} mode on\x1b[0m`, "info");
     },
@@ -169,13 +131,17 @@ export default function readonlyMode(pi: ExtensionAPI) {
     // Clear previous turn's audit entries (only agent turns, not commands)
     if (mode.current === "debug") clearAudit();
 
-    const injection = mode.beginTurn(ctx.cwd);
+    const injection = mode.buildInjection();
     if (!injection) return;
 
-    if (injection.kind === "system_prompt") {
-      return { systemPrompt: [...event.systemPrompt, injection.content] };
-    }
-    return { message: { customType: injection.customType, content: injection.content, display: false } };
+    return {
+      systemPrompt: injection.systemPrompt
+        ? [...event.systemPrompt, injection.systemPrompt]
+        : undefined,
+      message: injection.message
+        ? { ...injection.message, display: false }
+        : undefined,
+    };
   });
 
   if (CLEANUP_HISTORY) {

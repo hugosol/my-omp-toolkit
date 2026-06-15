@@ -3,11 +3,11 @@ import {
   MODES,
   ModeState,
   buildScope,
-  buildPromptContent,
+  buildPrompt,
   resolveToolPolicy,
   dispatchToolCall,
 } from "../../extensions/readonly-mode/mode";
-import type { TurnInjection, DispatchResult } from "../../extensions/readonly-mode/mode";
+import type { BuildInjectionResult, DispatchResult } from "../../extensions/readonly-mode/mode";
 import { DEFAULT_POLICY } from "../../extensions/readonly-mode/policies";
 
 // ============================================================
@@ -15,9 +15,15 @@ import { DEFAULT_POLICY } from "../../extensions/readonly-mode/policies";
 // ============================================================
 
 describe("MODES table", () => {
-  test("every mode has a valid injection kind", () => {
+  test("every mode has valid injection config", () => {
     for (const [name, def] of Object.entries(MODES)) {
-      expect(["system_prompt", "message_every_turn", "message_on_transition"]).toContain(def.injection.kind);
+      const cfg = def.injection;
+      // At least one injection slot must be configured
+      expect(cfg.systemPrompt || cfg.everyTurnMessage || cfg.transitionMessage).toBeTruthy();
+      // transitionMessage.reinjectAfter defaults to 0 when absent
+      if (cfg.transitionMessage) {
+        expect(typeof cfg.transitionMessage.reinjectAfter).toBe("number");
+      }
     }
   });
 
@@ -33,16 +39,15 @@ describe("MODES table", () => {
     }
   });
 
-  test("all four modes are defined", () => {
-    expect(Object.keys(MODES).sort()).toEqual(["build", "chat", "debug", "explore"]);
+  test("all three modes are defined", () => {
+    expect(Object.keys(MODES).sort()).toEqual(["build", "debug", "explore"]);
   });
 
   test("build mode has no tool restrictions", () => {
     expect(MODES.build.toolKey).toBe("build");
   });
 
-  test("chat and explore share readonly tool key", () => {
-    expect(MODES.chat.toolKey).toBe("readonly");
+  test("explore mode uses readonly tool key", () => {
     expect(MODES.explore.toolKey).toBe("readonly");
   });
 
@@ -66,14 +71,12 @@ describe("buildScope", () => {
   test("'workspace' kind returns only cwd + .omp/agent", () => {
     const scope = buildScope(cwd, "workspace", []);
     expect(scope.length).toBeGreaterThanOrEqual(1);
-    // cwd is always included
     expect(scope.some(s => s.includes("project"))).toBe(true);
   });
 
   test("'paths' kind appends scopePaths", () => {
     const scope = buildScope(cwd, "paths", ["/external/lib"]);
     expect(scope.some(s => s.includes("project"))).toBe(true);
-    // OS-independent check: extra path contains its basename components
     expect(scope.some(s => s.includes("lib") && s.includes("external"))).toBe(true);
   });
 
@@ -139,129 +142,147 @@ describe("resolveToolPolicy", () => {
   });
 
   test("debug toolKey inherits readonly policies for tools not explicitly overridden", () => {
-    // read-only tools inherited from TOOL_POLICIES via MERGED_DEBUG_POLICIES
     expect(resolveToolPolicy("read", "debug").type).toBe("allow");
     expect(resolveToolPolicy("web_search", "debug").type).toBe("allow");
     expect(resolveToolPolicy("ask", "debug").type).toBe("allow");
     expect(resolveToolPolicy("todo", "debug").type).toBe("allow");
     expect(resolveToolPolicy("resolve", "debug").type).toBe("allow");
-    // lsp — inherited from readonly baseline, not overridden in DEBUG_TOOL_POLICIES
     expect(resolveToolPolicy("lsp", "debug").type).toBe("check");
   });
 });
 
 // ============================================================
-// ModeState — beginTurn (core injection logic)
+// buildPrompt — prompt content per injection slot
 // ============================================================
 
-describe("ModeState.beginTurn", () => {
-  const cwd = "/home/user/project";
-
-  test("build mode injects message on first turn (transition)", () => {
-    const m = new ModeState();
-    m.current = "build";
-    const inj = m.beginTurn(cwd);
-    expect(inj).not.toBeNull();
-    if (!inj) throw new Error("expected injection");
-    expect(inj.kind).toBe("message");
-    if (inj.kind !== "message") throw new Error("expected message");
-    expect(inj.customType).toBe("build-mode-context");
-    expect(inj.content).toContain("BUILD MODE");
+describe("buildPrompt", () => {
+  test("build mode returns transitionMessage only", () => {
+    const content = buildPrompt("build");
+    expect(content.systemPrompt).toBeUndefined();
+    expect(content.everyTurnMessage).toBeUndefined();
+    expect(content.transitionMessage).toBeDefined();
+    expect(content.transitionMessage!).toContain("BUILD MODE");
   });
 
-  test("build mode does not inject on second turn (no transition, reinjectAfter=0)", () => {
+  test("explore mode returns systemPrompt and transitionMessage", () => {
+    const content = buildPrompt("explore");
+    expect(content.systemPrompt).toBeDefined();
+    expect(content.systemPrompt!).toContain("EXPLORE MODE");
+    expect(content.everyTurnMessage).toBeUndefined();
+    expect(content.transitionMessage).toBeDefined();
+    expect(content.transitionMessage!).toContain("EXPLORE MODE");
+    expect(content.transitionMessage!).toContain("switched to Explore");
+  });
+
+  test("explore mode systemPrompt does NOT mention scope", () => {
+    const content = buildPrompt("explore");
+    expect(content.systemPrompt!).not.toContain("scope");
+    expect(content.systemPrompt!).not.toContain("workspace");
+    expect(content.systemPrompt!).not.toContain("Allowed search paths");
+  });
+
+  test("debug mode returns everyTurnMessage only", () => {
+    const content = buildPrompt("debug");
+    expect(content.systemPrompt).toBeUndefined();
+    expect(content.everyTurnMessage).toBeDefined();
+    expect(content.everyTurnMessage!).toContain("DEBUG MODE");
+    expect(content.transitionMessage).toBeUndefined();
+  });
+});
+
+// ============================================================
+// ModeState — buildInjection (core injection logic)
+// ============================================================
+
+describe("ModeState.buildInjection", () => {
+  test("build mode injects transition message on first turn", () => {
     const m = new ModeState();
     m.current = "build";
-    m.beginTurn(cwd); // turn 1: injects (transition)
-    const injection = m.beginTurn(cwd); // turn 2: never re-injects
+    const inj = m.buildInjection();
+    expect(inj).not.toBeNull();
+    if (!inj) throw new Error("expected injection");
+    expect(inj.systemPrompt).toBeUndefined();
+    expect(inj.message).toBeDefined();
+    expect(inj.message!.customType).toBe("build-mode-context");
+    expect(inj.message!.content).toContain("BUILD MODE");
+  });
+
+  test("build mode does not inject on second turn (reinjectAfter=0)", () => {
+    const m = new ModeState();
+    m.current = "build";
+    m.buildInjection(); // turn 1: injects (transition)
+    const injection = m.buildInjection(); // turn 2: never re-injects
     expect(injection).toBeNull();
   });
 
   test("build mode never re-injects (reinjectAfter=0)", () => {
     const m = new ModeState();
     m.current = "build";
-    m.beginTurn(cwd); // turn 1: injects
-    for (let i = 0; i < 10; i++) m.beginTurn(cwd);
-    const injection = m.beginTurn(cwd);
+    m.buildInjection(); // turn 1: injects
+    for (let i = 0; i < 10; i++) m.buildInjection();
+    const injection = m.buildInjection();
     expect(injection).toBeNull();
   });
 
-  test("debug mode injects message every turn (message_every_turn)", () => {
+  test("debug mode injects message every turn", () => {
     const m = new ModeState();
     m.current = "debug";
-    m.scopePaths = ["all"];
-    const inj1 = m.beginTurn(cwd);
-    const inj2 = m.beginTurn(cwd);
-    const inj3 = m.beginTurn(cwd);
-    expect(inj1!.kind).toBe("message");
-    expect(inj2!.kind).toBe("message");
-    expect(inj3!.kind).toBe("message");
-    expect(inj1!.content).toContain("DEBUG MODE");
+    const inj1 = m.buildInjection();
+    const inj2 = m.buildInjection();
+    const inj3 = m.buildInjection();
+    [inj1, inj2, inj3].forEach(inj => {
+      expect(inj!.systemPrompt).toBeUndefined();
+      expect(inj!.message).toBeDefined();
+      expect(inj!.message!.content).toContain("DEBUG MODE");
+    });
   });
 
-  test("chat mode injects system_prompt every turn", () => {
-    const m = new ModeState();
-    m.current = "chat";
-    const inj1 = m.beginTurn(cwd);
-    const inj2 = m.beginTurn(cwd);
-    expect(inj1!.kind).toBe("system_prompt");
-    expect(inj2!.kind).toBe("system_prompt");
-    expect(inj1!.content).toContain("CHAT MODE");
-  });
-
-  test("chat mode system_prompt includes allowed search paths", () => {
-    const m = new ModeState();
-    m.current = "chat";
-    const injection = m.beginTurn(cwd);
-    expect(injection!.content).toContain("Allowed search paths");
-  });
-
-  test("explore mode injects system_prompt with scope description", () => {
+  test("explore mode injects systemPrompt every turn", () => {
     const m = new ModeState();
     m.current = "explore";
-    m.scopePaths = ["all"];
-    const injection = m.beginTurn(cwd);
-    expect(injection!.kind).toBe("system_prompt");
-    expect(injection!.content).toContain("EXPLORE MODE");
-    expect(injection!.content).toContain("all directories");
+    const inj1 = m.buildInjection();
+    const inj2 = m.buildInjection();
+    expect(inj1!.systemPrompt).toBeDefined();
+    expect(inj1!.systemPrompt!).toContain("EXPLORE MODE");
+    expect(inj2!.systemPrompt).toBeDefined();
   });
 
-  test("explore mode with specific paths mentions them", () => {
+  test("explore mode injects both systemPrompt and transitionMessage on first turn", () => {
     const m = new ModeState();
     m.current = "explore";
-    m.scopePaths = ["/other/project"];
-    const injection = m.beginTurn(cwd);
-    expect(injection!.content).toContain("/other/project");
+    const inj = m.buildInjection();
+    expect(inj!.systemPrompt).toBeDefined();
+    expect(inj!.message).toBeDefined();
+    expect(inj!.message!.content).toContain("switched to Explore");
   });
 
-  test("mode switch triggers injection even for message_on_transition", () => {
+  test("explore mode injects only systemPrompt on second turn (no re-transition)", () => {
     const m = new ModeState();
-    m.beginTurn(cwd); // build turn 1: injects
-    m.beginTurn(cwd); // build turn 2: no inject
+    m.current = "explore";
+    m.buildInjection(); // turn 1: systemPrompt + transition
+    const inj = m.buildInjection(); // turn 2: systemPrompt only
+    expect(inj!.systemPrompt).toBeDefined();
+    expect(inj!.message).toBeUndefined();
+  });
 
-    // Switch to chat
-    m.current = "chat";
-    const injection = m.beginTurn(cwd);
+  test("mode switch from build to explore triggers transition", () => {
+    const m = new ModeState();
+    m.buildInjection(); // build turn 1: transition
+    m.buildInjection(); // build turn 2: no inject
+
+    m.current = "explore";
+    const injection = m.buildInjection();
     expect(injection).not.toBeNull();
-    expect(injection!.content).toContain("CHAT MODE");
-  });
-
-  test("scope change triggers injection", () => {
-    const m = new ModeState();
-    m.current = "explore";
-    m.beginTurn(cwd); // explore with no paths, injects
-
-    m.scopePaths = ["/new/path"];
-    const injection = m.beginTurn(cwd);
-    expect(injection).not.toBeNull();
-    expect(injection!.content).toContain("/new/path");
+    expect(injection!.systemPrompt).toContain("EXPLORE MODE");
+    expect(injection!.message).toBeDefined();
+    expect(injection!.message!.content).toContain("switched to Explore");
   });
 
   test("null is returned when no injection needed (build, after transition)", () => {
     const m = new ModeState();
     m.current = "build";
-    m.beginTurn(cwd); // turn 1: injects (transition from undefined→build)
-    const injection = m.beginTurn(cwd); // turn 2: no transition, reinjectAfter=0 → null
+    m.buildInjection(); // turn 1: injects (transition)
+    const injection = m.buildInjection(); // turn 2: no transition, reinjectAfter=0 → null
     expect(injection).toBeNull();
   });
 });
@@ -276,30 +297,15 @@ describe("ModeState label", () => {
     expect(m.label).toBe("Build");
   });
 
-  test("chat mode → Chat", () => {
-    const m = new ModeState();
-    m.current = "chat";
-    expect(m.label).toBe("Chat");
-  });
-
-  test("explore mode with all → Explore: all", () => {
+  test("explore mode → Explore", () => {
     const m = new ModeState();
     m.current = "explore";
-    m.scopePaths = ["all"];
-    expect(m.label).toBe("Explore: all");
-  });
-
-  test("explore mode with paths → Explore: <paths>", () => {
-    const m = new ModeState();
-    m.current = "explore";
-    m.scopePaths = ["/a", "/b"];
-    expect(m.label).toBe("Explore: /a, /b");
+    expect(m.label).toBe("Explore");
   });
 
   test("debug mode → Debug", () => {
     const m = new ModeState();
     m.current = "debug";
-    m.scopePaths = ["all"];
     expect(m.label).toBe("Debug");
   });
 });
@@ -314,9 +320,9 @@ describe("ModeState.resolveToolPolicy", () => {
     expect(m.resolveToolPolicy("write").type).toBe("allow");
   });
 
-  test("chat mode blocks write", () => {
+  test("explore mode blocks write", () => {
     const m = new ModeState();
-    m.current = "chat";
+    m.current = "explore";
     expect(m.resolveToolPolicy("write").type).toBe("block");
   });
 
@@ -334,7 +340,7 @@ describe("ModeState.resolveToolPolicy", () => {
 });
 
 // ============================================================
-// ModeState — getScope
+// ModeState — getScope (all modes return ["all"] since scopeKind is all)
 // ============================================================
 
 describe("ModeState.getScope", () => {
@@ -342,71 +348,19 @@ describe("ModeState.getScope", () => {
 
   test("build mode returns all sentinel", () => {
     const m = new ModeState();
-    const scope = m.getScope(cwd);
-    expect(scope).toEqual(["all"]);
+    expect(m.getScope(cwd)).toEqual(["all"]);
   });
 
-  test("chat mode returns workspace scope", () => {
-    const m = new ModeState();
-    m.current = "chat";
-    const scope = m.getScope(cwd);
-    expect(scope.some(s => s.includes("project"))).toBe(true);
-  });
-
-  test("explore mode returns workspace + extra paths", () => {
+  test("explore mode returns all sentinel", () => {
     const m = new ModeState();
     m.current = "explore";
-    m.scopePaths = ["/other/lib"];
-    const scope = m.getScope(cwd);
-    expect(scope.some(s => s.includes("project"))).toBe(true);
-    expect(scope.some(s => s.includes("lib") && s.includes("other"))).toBe(true);
-  });
-
-  test("explore mode with 'all' scopePaths returns all sentinel", () => {
-    const m = new ModeState();
-    m.current = "explore";
-    m.scopePaths = ["all"];
-    const scope = m.getScope(cwd);
-    expect(scope).toEqual(["all"]);
+    expect(m.getScope(cwd)).toEqual(["all"]);
   });
 
   test("debug mode returns all sentinel", () => {
     const m = new ModeState();
     m.current = "debug";
-    const scope = m.getScope(cwd);
-    expect(scope).toEqual(["all"]);
-  });
-});
-
-// ============================================================
-// buildPromptContent
-// ============================================================
-
-describe("buildPromptContent", () => {
-  const cwd = "/home/user/project";
-
-  test("build mode returns BUILD_SYSTEM_PROMPT", () => {
-    const content = buildPromptContent("build", [], cwd);
-    expect(content).toContain("BUILD MODE");
-    expect(content).not.toContain("Allowed search paths");
-  });
-
-  test("debug mode returns DEBUG_TRANSITION_PROMPT", () => {
-    const content = buildPromptContent("debug", ["all"], cwd);
-    expect(content).toContain("DEBUG MODE");
-  });
-
-  test("chat mode includes search paths", () => {
-    const content = buildPromptContent("chat", [], cwd);
-    expect(content).toContain("CHAT MODE");
-    expect(content).toContain("Allowed search paths");
-  });
-
-  test("explore mode with all shows expanded scope without path footer", () => {
-    const content = buildPromptContent("explore", ["all"], cwd);
-    expect(content).toContain("EXPLORE MODE");
-    expect(content).toContain("all directories");
-    expect(content).not.toContain("Allowed search paths");
+    expect(m.getScope(cwd)).toEqual(["all"]);
   });
 });
 
@@ -417,10 +371,9 @@ describe("buildPromptContent", () => {
 describe("dispatchToolCall", () => {
   const cwd = "/home/user/project";
 
-  function mode(name: "build" | "chat" | "explore" | "debug", scopePaths: string[] = []): ModeState {
+  function mode(name: "build" | "explore" | "debug"): ModeState {
     const m = new ModeState();
     m.current = name;
-    m.scopePaths = scopePaths;
     return m;
   }
 
@@ -438,229 +391,215 @@ describe("dispatchToolCall", () => {
     expect(result.shouldAudit).toBe(false);
   });
 
-  // ── Chat mode: block-level tools ──
+  // ── Explore mode: block-level tools ──
 
-  test("chat mode blocks write", () => {
-    const result = dispatchToolCall({ toolName: "write", input: {} }, mode("chat"), cwd);
+  test("explore mode blocks write", () => {
+    const result = dispatchToolCall({ toolName: "write", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("modifies files");
     expect(result.shouldAudit).toBe(false);
   });
 
-  test("chat mode blocks edit", () => {
-    const result = dispatchToolCall({ toolName: "edit", input: {} }, mode("chat"), cwd);
+  test("explore mode blocks edit", () => {
+    const result = dispatchToolCall({ toolName: "edit", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("modifies files");
   });
 
-  test("chat mode blocks ast_edit", () => {
-    const result = dispatchToolCall({ toolName: "ast_edit", input: {} }, mode("chat"), cwd);
+  test("explore mode blocks ast_edit", () => {
+    const result = dispatchToolCall({ toolName: "ast_edit", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("modifies files");
   });
 
-  test("chat mode blocks eval", () => {
-    const result = dispatchToolCall({ toolName: "eval", input: {} }, mode("chat"), cwd);
+  test("explore mode blocks eval", () => {
+    const result = dispatchToolCall({ toolName: "eval", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("arbitrary code");
   });
 
-  test("chat mode blocks debug", () => {
-    const result = dispatchToolCall({ toolName: "debug", input: {} }, mode("chat"), cwd);
+  test("explore mode blocks debug", () => {
+    const result = dispatchToolCall({ toolName: "debug", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("modify program state");
   });
 
-  test("chat mode blocks unknown tool via DEFAULT_POLICY", () => {
-    const result = dispatchToolCall({ toolName: "made_up_tool", input: {} }, mode("chat"), cwd);
+  test("explore mode blocks unknown tool via DEFAULT_POLICY", () => {
+    const result = dispatchToolCall({ toolName: "made_up_tool", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("Unknown tool");
   });
 
-  // ── Chat mode: allow-level tools ──
+  // ── Explore mode: allow-level tools ──
 
-  test("chat mode allows read", () => {
-    const result = dispatchToolCall({ toolName: "read", input: {} }, mode("chat"), cwd);
+  test("explore mode allows read", () => {
+    const result = dispatchToolCall({ toolName: "read", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
     expect(result.shouldAudit).toBe(false);
   });
 
-  test("chat mode allows web_search", () => {
-    const result = dispatchToolCall({ toolName: "web_search", input: {} }, mode("chat"), cwd);
+  test("explore mode allows web_search", () => {
+    const result = dispatchToolCall({ toolName: "web_search", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode allows ask", () => {
-    const result = dispatchToolCall({ toolName: "ask", input: {} }, mode("chat"), cwd);
+  test("explore mode allows ask", () => {
+    const result = dispatchToolCall({ toolName: "ask", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode allows todo", () => {
-    const result = dispatchToolCall({ toolName: "todo", input: {} }, mode("chat"), cwd);
+  test("explore mode allows todo", () => {
+    const result = dispatchToolCall({ toolName: "todo", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode allows resolve", () => {
-    const result = dispatchToolCall({ toolName: "resolve", input: {} }, mode("chat"), cwd);
+  test("explore mode allows resolve", () => {
+    const result = dispatchToolCall({ toolName: "resolve", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  // ── Chat mode: find / ast_grep (scope-check tools like search) ──
+  // ── Explore mode: search/find/ast_grep (no scope limits → always allowed) ──
 
-  test("chat mode allows find within scope", () => {
-    const result = dispatchToolCall({ toolName: "find", input: { paths: "src/main.ts" } }, mode("chat"), cwd);
+  test("explore mode allows find with any path", () => {
+    const result = dispatchToolCall({ toolName: "find", input: { paths: "/etc/passwd" } }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode blocks find outside scope", () => {
-    const result = dispatchToolCall({ toolName: "find", input: { paths: "/etc/passwd" } }, mode("chat"), cwd);
-    expect(result.block).toBeDefined();
-    expect(result.block!.reason).toContain("outside allowed scope");
-  });
-
-  test("chat mode allows ast_grep within scope", () => {
-    const result = dispatchToolCall({ toolName: "ast_grep", input: { paths: ["src/**/*.ts"] } }, mode("chat"), cwd);
+  test("explore mode allows search with any path", () => {
+    const result = dispatchToolCall({ toolName: "search", input: { paths: "/etc/passwd" } }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode blocks ast_grep outside scope", () => {
-    const result = dispatchToolCall({ toolName: "ast_grep", input: { paths: ["/etc/secret.ts"] } }, mode("chat"), cwd);
-    expect(result.block).toBeDefined();
-    expect(result.block!.reason).toContain("outside allowed scope");
-  });
-
-  // ── Chat mode: check-level tools (guards exercised) ──
-
-  test("chat mode allows bash ls", () => {
-    const result = dispatchToolCall({ toolName: "bash", input: { command: "ls -la" } }, mode("chat"), cwd);
+  test("explore mode allows ast_grep with any paths", () => {
+    const result = dispatchToolCall({ toolName: "ast_grep", input: { paths: ["/etc/secret.ts"] } }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode blocks bash rm", () => {
-    const result = dispatchToolCall({ toolName: "bash", input: { command: "rm -rf /" } }, mode("chat"), cwd);
+  test("explore mode allows search with no paths (workspace default)", () => {
+    const result = dispatchToolCall({ toolName: "search", input: {} }, mode("explore"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  // ── Explore mode: check-level tools (guards exercised) ──
+
+  test("explore mode allows bash ls", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "ls -la" } }, mode("explore"), cwd);
+    expect(result.block).toBeUndefined();
+  });
+
+  test("explore mode blocks bash rm", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "rm -rf /" } }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("whitelist");
   });
 
-  test("chat mode blocks bash command chaining", () => {
-    const result = dispatchToolCall({ toolName: "bash", input: { command: "ls && rm file" } }, mode("chat"), cwd);
+  test("explore mode blocks bash command chaining", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "ls && rm file" } }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("chaining");
   });
 
-  test("chat mode blocks bash output redirection", () => {
-    const result = dispatchToolCall({ toolName: "bash", input: { command: "ls > out.txt" } }, mode("chat"), cwd);
+  test("explore mode blocks bash output redirection", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "ls > out.txt" } }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("redirection");
   });
 
-  test("chat mode blocks sed -i", () => {
-    const result = dispatchToolCall({ toolName: "bash", input: { command: "sed -i 's/a/b/' file" } }, mode("chat"), cwd);
+  test("explore mode blocks sed -i", () => {
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "sed -i 's/a/b/' file" } }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("sed -i");
   });
 
-  test("chat mode allows search within scope", () => {
-    const result = dispatchToolCall({ toolName: "search", input: { paths: "src/main.ts" } }, mode("chat"), cwd);
-    expect(result.block).toBeUndefined();
-  });
-
-  test("chat mode blocks search outside scope", () => {
-    const result = dispatchToolCall({ toolName: "search", input: { paths: "/etc/passwd" } }, mode("chat"), cwd);
-    expect(result.block).toBeDefined();
-    expect(result.block!.reason).toContain("outside allowed scope");
-  });
-
-  test("chat mode blocks LSP rename", () => {
-    const result = dispatchToolCall({ toolName: "lsp", input: { action: "rename" } }, mode("chat"), cwd);
+  test("explore mode blocks LSP rename", () => {
+    const result = dispatchToolCall({ toolName: "lsp", input: { action: "rename" } }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("rename");
   });
 
-  test("chat mode allows LSP definition", () => {
-    const result = dispatchToolCall({ toolName: "lsp", input: { action: "definition" } }, mode("chat"), cwd);
+  test("explore mode allows LSP definition", () => {
+    const result = dispatchToolCall({ toolName: "lsp", input: { action: "definition" } }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode blocks LSP rename_file", () => {
-    const result = dispatchToolCall({ toolName: "lsp", input: { action: "rename_file" } }, mode("chat"), cwd);
+  test("explore mode blocks LSP rename_file", () => {
+    const result = dispatchToolCall({ toolName: "lsp", input: { action: "rename_file" } }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("rename_file");
   });
 
-  test("chat mode blocks LSP code_actions with apply: true", () => {
-    const result = dispatchToolCall({ toolName: "lsp", input: { action: "code_actions", apply: true } }, mode("chat"), cwd);
+  test("explore mode blocks LSP code_actions with apply: true", () => {
+    const result = dispatchToolCall({ toolName: "lsp", input: { action: "code_actions", apply: true } }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("code_actions");
   });
 
-  test("chat mode allows LSP code_actions without apply", () => {
-    const result = dispatchToolCall({ toolName: "lsp", input: { action: "code_actions" } }, mode("chat"), cwd);
+  test("explore mode allows LSP code_actions without apply", () => {
+    const result = dispatchToolCall({ toolName: "lsp", input: { action: "code_actions" } }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode allows LSP hover", () => {
-    const result = dispatchToolCall({ toolName: "lsp", input: { action: "hover" } }, mode("chat"), cwd);
+  test("explore mode allows LSP hover", () => {
+    const result = dispatchToolCall({ toolName: "lsp", input: { action: "hover" } }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode blocks browser run", () => {
-    const result = dispatchToolCall({ toolName: "browser", input: { action: "run" } }, mode("chat"), cwd);
+  test("explore mode blocks browser run", () => {
+    const result = dispatchToolCall({ toolName: "browser", input: { action: "run" } }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("Browser");
   });
 
-  test("chat mode allows browser open", () => {
-    const result = dispatchToolCall({ toolName: "browser", input: { action: "open" } }, mode("chat"), cwd);
+  test("explore mode allows browser open", () => {
+    const result = dispatchToolCall({ toolName: "browser", input: { action: "open" } }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode allows browser close", () => {
-    const result = dispatchToolCall({ toolName: "browser", input: { action: "close" } }, mode("chat"), cwd);
+  test("explore mode allows browser close", () => {
+    const result = dispatchToolCall({ toolName: "browser", input: { action: "close" } }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode allows task explore agent", () => {
-    const result = dispatchToolCall({ toolName: "task", input: { agent: "explore" } }, mode("chat"), cwd);
+  test("explore mode allows task explore agent", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "explore" } }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode allows task librarian agent", () => {
-    const result = dispatchToolCall({ toolName: "task", input: { agent: "librarian" } }, mode("chat"), cwd);
+  test("explore mode allows task librarian agent", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "librarian" } }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode allows task plan agent", () => {
-    const result = dispatchToolCall({ toolName: "task", input: { agent: "plan" } }, mode("chat"), cwd);
+  test("explore mode allows task plan agent", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "plan" } }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode allows task reviewer agent", () => {
-    const result = dispatchToolCall({ toolName: "task", input: { agent: "reviewer" } }, mode("chat"), cwd);
+  test("explore mode allows task reviewer agent", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "reviewer" } }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
   });
 
-  test("chat mode blocks task agent with alternative hint", () => {
-    const result = dispatchToolCall({ toolName: "task", input: { agent: "task" } }, mode("chat"), cwd);
+  test("explore mode blocks task agent with alternative hint", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "task" } }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
-    // formatBlock applies use_alternative → "Instead try"
     expect(result.block!.reason).toContain("Instead try");
   });
 
-  test("chat mode blocks task unknown agent with switch_to_build", () => {
-    const result = dispatchToolCall({ toolName: "task", input: { agent: "oracle" } }, mode("chat"), cwd);
+  test("explore mode blocks task unknown agent with switch_to_build", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "oracle" } }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("switch to Build mode");
   });
 
-  test("chat mode blocks task with missing agent", () => {
-    const result = dispatchToolCall({ toolName: "task", input: {} }, mode("chat"), cwd);
+  test("explore mode blocks task with missing agent", () => {
+    const result = dispatchToolCall({ toolName: "task", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("switch to Build mode");
   });
 
-  test("chat mode blocks task quick_task agent with alternative hint", () => {
-    const result = dispatchToolCall({ toolName: "task", input: { agent: "quick_task" } }, mode("chat"), cwd);
+  test("explore mode blocks task quick_task agent with alternative hint", () => {
+    const result = dispatchToolCall({ toolName: "task", input: { agent: "quick_task" } }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("Instead try");
   });
@@ -765,8 +704,6 @@ describe("dispatchToolCall", () => {
   test("debug mode read is allowed but still flags audit (caller filters)", () => {
     const result = dispatchToolCall({ toolName: "read", input: {} }, mode("debug"), cwd);
     expect(result.block).toBeUndefined();
-    // read is allowed in debug mode, so shouldAudit is true.
-    // The caller (index.ts) applies isReadonlyAuditTool to filter it out.
     expect(result.shouldAudit).toBe(true);
   });
 
@@ -788,49 +725,26 @@ describe("dispatchToolCall", () => {
     expect(result.shouldAudit).toBe(false);
   });
 
-
   test("debug mode blocks task with missing agent and does NOT flag audit", () => {
     const result = dispatchToolCall({ toolName: "task", input: {} }, mode("debug"), cwd);
     expect(result.block).toBeDefined();
     expect(result.shouldAudit).toBe(false);
   });
 
-  // ── Explore mode: scope enforcement ──
-
-  test("explore mode with 'all' scopePaths allows search anywhere", () => {
-    const m = mode("explore", ["all"]);
-    const result = dispatchToolCall({ toolName: "search", input: { paths: "/etc/passwd" } }, m, cwd);
-    expect(result.block).toBeUndefined();
-  });
-
-  test("explore mode with specific scopePaths blocks search outside them", () => {
-    const m = mode("explore", ["/other/lib"]);
-    const result = dispatchToolCall({ toolName: "search", input: { paths: "/etc/passwd" } }, m, cwd);
-    expect(result.block).toBeDefined();
-    expect(result.block!.reason).toContain("outside allowed scope");
-  });
-
-
-  test("explore mode blocks write", () => {
-    const m = mode("explore", ["/other/lib"]);
-    const result = dispatchToolCall({ toolName: "write", input: {} }, m, cwd);
-    expect(result.block).toBeDefined();
-    expect(result.block!.reason).toContain("modifies files");
-  });
   // ── formatBlock integration: hints become formatted suffixes ──
 
   test("switch_to_build hint produces '/readonly' suffix", () => {
-    const result = dispatchToolCall({ toolName: "write", input: {} }, mode("chat"), cwd);
+    const result = dispatchToolCall({ toolName: "write", input: {} }, mode("explore"), cwd);
     expect(result.block!.reason).toContain("/readonly");
   });
 
   test("use_alternative hint produces 'Instead try' suffix", () => {
-    const result = dispatchToolCall({ toolName: "browser", input: { action: "run" } }, mode("chat"), cwd);
+    const result = dispatchToolCall({ toolName: "browser", input: { action: "run" } }, mode("explore"), cwd);
     expect(result.block!.reason).toContain("Instead try");
   });
 
   test("silent hint produces no extra suffix on whitelist violations", () => {
-    const result = dispatchToolCall({ toolName: "bash", input: { command: "rm -rf /" } }, mode("chat"), cwd);
+    const result = dispatchToolCall({ toolName: "bash", input: { command: "rm -rf /" } }, mode("explore"), cwd);
     expect(result.block!.reason).not.toContain("/readonly");
     expect(result.block!.reason).not.toContain("Instead try");
   });

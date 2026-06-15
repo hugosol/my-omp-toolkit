@@ -6,13 +6,12 @@
 
 import {
   BUILD_SYSTEM_PROMPT,
-  CHAT_SYSTEM_PROMPT,
+  READONLY_SYSTEM_PROMPT,
+  READONLY_TRANSITION_PROMPT,
   DEBUG_TRANSITION_PROMPT,
-  exploreSystemPrompt,
 } from "./prompts";
 import {
   getAllowedScope,
-  buildScopeGuide,
 } from "./scope";
 import {
   TOOL_POLICIES,
@@ -24,27 +23,33 @@ import { formatBlock } from "./policies";
 
 // ──  Dimension types  ──
 
-export type ModeName = "build" | "chat" | "explore" | "debug";
+export type ModeName = "build" | "explore" | "debug";
 
 export type ScopeKind = "all" | "workspace" | "paths";
 
-export type InjectionKind =
-  | "system_prompt"
-  | "message_every_turn"
-  | "message_on_transition";
+// ──  Injection configuration (B-style: one boolean/object field per slot)  ──
 
-// ──  Injection configuration  ──
+export interface TransitionMessageConfig {
+  /** Re-inject after N same-mode turns to refresh model attention.
+   *  0 (default) = only on mode switch, never re-inject. */
+  reinjectAfter?: number;
+}
 
 export interface InjectionConfig {
-  kind: InjectionKind;
-  reinjectAfter?: number; // only for message_on_transition; 0 = never
+  /** Append to LLM system message every turn (outside history). */
+  systemPrompt?: boolean;
+  /** Invisible message before user prompt every turn (in history). */
+  everyTurnMessage?: boolean;
+  /** Invisible message on mode switch (in history, minimal tokens).
+   *  Content comes from buildPrompt(mode).transitionMessage. */
+  transitionMessage?: TransitionMessageConfig;
 }
 
 // ──  Full mode definition  ──
 
 export interface ModeDef {
   name:       ModeName;
-  label:      string;       // display label (Explore appends scope paths)
+  label:      string;
   color:      string;       // ANSI escape code
   customType: string;       // message customType for history injection
   injection:  InjectionConfig;
@@ -60,26 +65,20 @@ export const MODES: Record<ModeName, ModeDef> = {
     label:      "Build",
     color:      "\x1b[34m",
     customType: "build-mode-context",
-    injection:  { kind: "message_on_transition", reinjectAfter: 0 },
+    injection:  { transitionMessage: { reinjectAfter: 0 } },
     scopeKind:  "all",
     toolKey:    "build",
-  },
-  chat: {
-    name:       "chat",
-    label:      "Chat",
-    color:      "\x1b[38;5;214m",
-    customType: "chat-mode-context",
-    injection:  { kind: "system_prompt" },
-    scopeKind:  "workspace",
-    toolKey:    "readonly",
   },
   explore: {
     name:       "explore",
     label:      "Explore",
     color:      "\x1b[32m",
     customType: "explore-mode-context",
-    injection:  { kind: "system_prompt" },
-    scopeKind:  "paths",
+    injection:  {
+      systemPrompt: true,
+      transitionMessage: { reinjectAfter: 0 },
+    },
+    scopeKind:  "all",
     toolKey:    "readonly",
   },
   debug: {
@@ -87,7 +86,7 @@ export const MODES: Record<ModeName, ModeDef> = {
     label:      "Debug",
     color:      "\x1b[33m",
     customType: "debug-mode-context",
-    injection:  { kind: "message_every_turn" },
+    injection:  { everyTurnMessage: true },
     scopeKind:  "all",
     toolKey:    "debug",
   },
@@ -115,29 +114,31 @@ export function buildScope(
   }
 }
 
-/** Build the prompt content (system prompt or transition message) for a mode. */
-export function buildPromptContent(
-  mode: ModeName,
-  scopePaths: string[],
-  cwd: string,
-): string {
-  const scopeFooter = () =>
-    `\nAllowed search paths:\n${buildScopeGuide(buildScope(cwd, MODES[mode].scopeKind, scopePaths))}`;
+// ──  Prompt content per injection slot  ──
 
+export interface PromptContent {
+  systemPrompt?: string;
+  everyTurnMessage?: string;
+  transitionMessage?: string;
+}
+
+/** Build the prompt content for each injection slot of a mode.
+ *  InjectionConfig decides which slots are active; this fills them. */
+export function buildPrompt(mode: ModeName): PromptContent {
   switch (mode) {
     case "build":
-      return BUILD_SYSTEM_PROMPT;
+      return {
+        transitionMessage: BUILD_SYSTEM_PROMPT,
+      };
+    case "explore":
+      return {
+        systemPrompt: READONLY_SYSTEM_PROMPT,
+        transitionMessage: READONLY_TRANSITION_PROMPT,
+      };
     case "debug":
-      return DEBUG_TRANSITION_PROMPT;
-    case "chat":
-      return CHAT_SYSTEM_PROMPT + scopeFooter();
-    case "explore": {
-      const isAll = scopePaths.includes("all");
-      const desc = isAll
-        ? "all directories (including workspace and ~/.omp/agent)"
-        : `workspace + ${scopePaths.join(", ")} (and ~/.omp/agent)`;
-      return exploreSystemPrompt(desc) + (isAll ? "" : scopeFooter());
-    }
+      return {
+        everyTurnMessage: DEBUG_TRANSITION_PROMPT,
+      };
   }
 }
 
@@ -152,13 +153,13 @@ export function resolveToolPolicy(
 }
 
 // ============================================================
-// Turn injection result type
+// Build injection result type
 // ============================================================
 
-export type TurnInjection =
-  | { kind: "system_prompt"; content: string }
-  | { kind: "message"; customType: string; content: string }
-  | null;
+export interface BuildInjectionResult {
+  systemPrompt?: string;
+  message?: { customType: string; content: string };
+}
 
 // ============================================================
 // ModeState — the single mutable state held by the extension.
@@ -166,8 +167,7 @@ export type TurnInjection =
 // ============================================================
 
 export class ModeState {
-  current:    ModeName = "build";
-  scopePaths: string[] = [];
+  current: ModeName = "build";
 
   // ──  Transition tracking (internal)  ──
   private _prev: ModeName | undefined;
@@ -177,20 +177,11 @@ export class ModeState {
   // ──  Derived  ──
   get def(): ModeDef { return MODES[this.current]; }
   get color(): string { return this.def.color; }
-
-  get label(): string {
-    if (this.current === "explore" && this.scopePaths.length > 0) {
-      const d = this.scopePaths.includes("all")
-        ? "all"
-        : this.scopePaths.join(", ");
-      return `Explore: ${d}`;
-    }
-    return this.def.label;
-  }
+  get label(): string { return this.def.label; }
 
   /** Resolved scope directories for the current mode. */
   getScope(cwd: string): string[] {
-    return buildScope(cwd, this.def.scopeKind, this.scopePaths);
+    return buildScope(cwd, this.def.scopeKind, []);
   }
 
   /** Tool policy for the current mode. */
@@ -198,50 +189,47 @@ export class ModeState {
     return resolveToolPolicy(toolName, this.def.toolKey);
   }
 
-  /** Determine turn injection for this turn. Returns null when nothing to inject. */
-  beginTurn(cwd: string): TurnInjection {
+  /** Compute injections for this turn. Returns null when nothing to inject. */
+  buildInjection(): BuildInjectionResult | null {
     const cfg = this.def.injection;
     const changed = this._detectChange();
+    const content = buildPrompt(this.current);
 
-    // Decide whether to inject this turn
-    let shouldInject: boolean;
-    switch (cfg.kind) {
-      case "system_prompt":
-      case "message_every_turn":
-        shouldInject = true;
-        break;
-      case "message_on_transition":
-        shouldInject = changed
-          || (cfg.reinjectAfter! > 0
-              && this._turns >= cfg.reinjectAfter!);
-        break;
+    // Decide whether to inject transition message this turn
+    let injectTransition = false;
+    if (cfg.transitionMessage) {
+      const ri = cfg.transitionMessage.reinjectAfter ?? 0;
+      injectTransition = changed || (ri > 0 && this._turns >= ri);
     }
 
-    // Update tracking
+    // Update tracking (after decision, before building result)
     this._turns = changed ? 0 : this._turns + 1;
     this._snapshot();
 
-    if (!shouldInject) return null;
+    const result: BuildInjectionResult = {};
 
-    const content = buildPromptContent(
-      this.current, this.scopePaths, cwd,
-    );
+    if (cfg.systemPrompt && content.systemPrompt) {
+      result.systemPrompt = content.systemPrompt;
+    }
 
-    return cfg.kind === "system_prompt"
-      ? { kind: "system_prompt", content }
-      : { kind: "message", customType: this.def.customType, content };
+    // Transition takes priority over everyTurn when both would fill the message slot
+    if (injectTransition && content.transitionMessage) {
+      result.message = { customType: this.def.customType, content: content.transitionMessage };
+    } else if (cfg.everyTurnMessage && content.everyTurnMessage) {
+      result.message = { customType: this.def.customType, content: content.everyTurnMessage };
+    }
+
+    return (result.systemPrompt || result.message) ? result : null;
   }
 
   // ──  Internal  ──
   private _detectChange(): boolean {
-    const prevKey = (this._prevScope ?? "");
-    const currKey = this.scopePaths.join("|");
-    return this._prev !== this.current || prevKey !== currKey;
+    return this._prev !== this.current;
   }
 
   private _snapshot(): void {
     this._prev = this.current;
-    this._prevScope = this.scopePaths.join("|");
+    this._prevScope = ""; // retained for future scope tracking
   }
 }
 
