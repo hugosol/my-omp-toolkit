@@ -67,17 +67,13 @@ function refreshWidget(): void {
 const YELLOW = "\x1b[33m";
 const RESET = "\x1b[0m";
 const DIM = "\x1b[2m";
-const GREEN = "\x1b[32m";
-const CYAN = "\x1b[36m";
-const MAGENTA = "\x1b[35m";
+
 const RED = "\x1b[31m";
-const BLUE = "\x1b[34m";
-const GRAY = "\x1b[90m";
 
 const WIDGET_SLOT = "audit-bar";
 
 /** File-modifying tools whose entries merge by file path. */
-const FILE_TOOLS = new Set(["write", "edit", "ast_edit"]);
+const FILE_TOOLS = new Set(["write", "edit"]);
 
 // ──  Collapsed widget (always shown)  ──
 
@@ -113,20 +109,18 @@ function renderWidget(): void {
 
     const { merged, standalone } = partition(entries);
 
-    // Merged file entries first
+    // Merged file entries: [tools] on left, path on right
     for (const { path, tools, blocked, count } of merged) {
-      const blockedTag = blocked ? `  ${RED}[\u2717 blocked]${RESET}` : "";
-      const toolList = tools.join(", ");
-      const countStr = count > 1 ? `  ${count} ops` : "";
-      const detail = `${DIM}${path}${RESET}  ${GREEN}(${toolList})${RESET}${countStr}${blockedTag}`;
-      lines.push(`${YELLOW}\u2502${RESET} ${detail.slice(0, 70)}`);
+      const blockedPrefix = blocked ? `${RED}\u2717${RESET} ` : "";
+      const leftCol = `${blockedPrefix}[${tools.join(", ")}]`.padEnd(22);
+      const countStr = count > 1 ? ` (${count} ops)` : "";
+      lines.push(`${YELLOW}\u2502${RESET} ${leftCol} ${DIM}${path}${RESET}${countStr}`);
     }
 
     // Standalone (non-mergeable) entries
     for (const e of standalone) {
-      const icon = toolIcon(e.tool);
       const blockedMark = e.blocked ? `${RED}\u2717${RESET}` : " ";
-      const toolLabel = `${blockedMark}${icon} ${e.tool}`.padEnd(22);
+      const toolLabel = `${blockedMark}${e.tool}`.padEnd(22);
       lines.push(`${YELLOW}\u2502${RESET} ${toolLabel} ${DIM}${e.detail.slice(0, 46)}${RESET}`);
     }
 
@@ -178,17 +172,4 @@ function partition(entries: AuditEntry[]): {
   return { merged: [...mergedMap.values()], standalone };
 }
 
-// ──  Tool icons  ──
 
-function toolIcon(tool: string): string {
-  switch (tool) {
-    case "write":    return `${GREEN}+`;
-    case "edit":     return `${YELLOW}~`;
-    case "ast_edit": return `${YELLOW}~`;
-    case "bash":     return `${CYAN}>`;
-    case "eval":     return `${MAGENTA}{}`;
-    case "debug":    return `${RED}\u25b6`;
-    case "browser":  return `${BLUE}\u25a0`;
-    default:         return "  ";
-  }
-}

@@ -158,11 +158,31 @@ export interface ToolPolicy {
 
 export const TOOL_POLICIES: Record<string, ToolPolicy> = {
   // Full allow — tools the model can use freely
-  web_search: { type: "allow" },
-  ask:        { type: "allow" },
-  todo:       { type: "allow" },
-  read:       { type: "allow" },
-  resolve:    { type: "allow" },
+  // Core tools
+  web_search:       { type: "allow" },
+  ask:              { type: "allow" },
+  todo:             { type: "allow" },
+  read:             { type: "allow" },
+  resolve:          { type: "allow" },
+  // Inter-agent communication & job management (omp READ_ONLY_TOOL_NAMES)
+  irc:              { type: "allow" },
+  job:              { type: "allow" },
+  // Subagent output submission (internal)
+  yield:            { type: "allow" },
+  // Memory — read/write to agent memory, never project files
+  recall:           { type: "allow" },
+  reflect:          { type: "allow" },
+  retain:           { type: "allow" },
+  memory_edit:      { type: "allow" },
+  // Visualization & inspection
+  render_mermaid:   { type: "allow" },
+  inspect_image:    { type: "allow" },
+  // Conversation checkpoints / rewind (no file mutation)
+  checkpoint:       { type: "allow" },
+  rewind:           { type: "allow" },
+  // Review & search utilities
+  report_finding:   { type: "allow" },
+  search_tool_bm25: { type: "allow" },
 
   // Block — write / exec tools (Tier 1: no readonly alternative)
   write:    { type: "block", reason: "Tool 'write' modifies files.", hint: "switch_to_build" },
