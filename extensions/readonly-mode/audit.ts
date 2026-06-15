@@ -28,22 +28,18 @@ let currentCtx: ExtensionContext | null = null;
 
 export function recordAudit(tool: string, detail: string, blocked: boolean): void {
   entries.push({ tool, detail, blocked });
-  if (expanded) renderWidget();
+  refreshWidget();
 }
 
 export function clearAudit(): void {
   entries = [];
-  if (expanded) renderWidget();
+  refreshWidget();
 }
 
 export function toggleAudit(ctx: ExtensionContext): void {
   currentCtx = ctx;
   expanded = !expanded;
-  if (expanded) {
-    renderWidget();
-  } else {
-    renderCollapsed();
-  }
+  refreshWidget();
 }
 
 export function setAuditCtx(ctx: ExtensionContext): void {
@@ -52,7 +48,16 @@ export function setAuditCtx(ctx: ExtensionContext): void {
 
 export function showCollapsed(): void {
   expanded = false;
-  renderCollapsed();
+  refreshWidget();
+}
+
+function refreshWidget(): void {
+  if (!currentCtx) return;
+  if (expanded) {
+    renderWidget();
+  } else {
+    renderCollapsed();
+  }
 }
 
 // ============================================================
