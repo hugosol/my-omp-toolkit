@@ -242,8 +242,6 @@ export class ModeState {
 export interface DispatchResult {
   /** undefined = allowed; defined = blocked with formatted reason */
   block?: { block: true; reason: string };
-  /** Debug mode + allowed operation → audit candidate (caller filters by tool) */
-  shouldAudit: boolean;
 }
 
 /** Resolve policy, run guard, format result — all in one callable unit. */
@@ -252,7 +250,7 @@ export function dispatchToolCall(
   mode: ModeState,
   cwd: string,
 ): DispatchResult {
-  if (mode.current === "build") return { shouldAudit: false };
+  if (mode.current === "build") return {};
 
   const policy = mode.resolveToolPolicy(event.toolName);
   let raw: BlockResult | undefined;
@@ -274,6 +272,5 @@ export function dispatchToolCall(
   const blocked = raw !== undefined;
   return {
     block: blocked ? formatBlock(raw) : undefined,
-    shouldAudit: mode.current === "debug" && !blocked,
   };
 }

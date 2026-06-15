@@ -11,9 +11,14 @@ import { ModeState, MODES, dispatchToolCall } from "./mode";
 // Audit helpers
 // ============================================================
 
-/** Tools that don't produce meaningful audit entries. */
-function isReadonlyAuditTool(tool: string): boolean {
-  return tool === "read" || tool === "web_search" || tool === "ask" || tool === "todo" || tool === "resolve";
+/** Write-capable tools — those that can mutate state and deserve audit recording.
+ *  Derived from TOOL_POLICIES: block-type tools + check-type tools that can write. */
+function isWriteTool(tool: string): boolean {
+  const writeTools = new Set([
+    "write", "edit", "ast_edit", "eval", "debug",
+    "bash", "task", "browser", "lsp",
+  ]);
+  return writeTools.has(tool);
 }
 
 /** Extract unique file paths from hashline [PATH#TAG] headers in an input string. */
@@ -45,16 +50,36 @@ function auditDetail(tool: string, input: unknown): string {
       return "";
     case "bash":
       return (inp.command as string)?.slice(0, 80) ?? "";
-    case "eval":
-      return (inp.code as string)?.split("\n")[0]?.slice(0, 60) ?? "";
-    case "browser":
-      return `${inp.action ?? ""} ${inp.url ?? ""}`.trim().slice(0, 60);
+    case "eval": {
+      const cells = inp.cells as Array<{ language?: string }> | undefined;
+      if (cells?.length) {
+        const lang = cells[0].language ?? "?";
+        return cells.length === 1 ? `${lang} (1 cell)` : `${lang} (${cells.length} cells)`;
+      }
+      return "";
+    }
+    case "browser": {
+      const action = inp.action as string | undefined;
+      if (action === "run") return "run";
+      return `${action ?? ""} ${inp.url ?? ""}`.trim().slice(0, 60);
+    }
     case "debug":
       return `${inp.action ?? ""} ${inp.program ?? ""}`.trim().slice(0, 60);
     case "task":
-      return `agent: ${inp.agent ?? "?"} — ${((inp.assignment as string) ?? "").slice(0, 50)}`;
-    case "lsp":
-      return `${inp.action ?? ""} ${(inp.file as string) ?? ""}`.trim().slice(0, 60);
+      return `agent: ${inp.agent ?? "?"} \u2014 ${((inp.assignment as string) ?? "").slice(0, 50)}`;
+    case "lsp": {
+      const lspAction = inp.action as string | undefined;
+      const file = (inp.file as string) ?? "";
+      if (lspAction === "rename") {
+        const newName = (inp.new_name as string) ?? "?";
+        return `rename ${file} \u2192 ${newName}`;
+      }
+      if (lspAction === "code_actions" && inp.apply) {
+        const codeAction = (inp.query as string) ?? "apply";
+        return `code_actions:apply: ${codeAction} ${file}`.trim();
+      }
+      return `${lspAction ?? ""} ${file}`.trim().slice(0, 60);
+    }
     default:
       return "";
   }
@@ -76,12 +101,7 @@ export default function readonlyMode(pi: ExtensionAPI) {
       `${color}└${"\u2500".repeat(label.length)}┘\x1b[0m`,
     ]);
     setAuditCtx(ctx);
-    if (mode.current === "debug") {
-      showCollapsed();
-    } else {
-      clearAudit();
-      showCollapsed();
-    }
+    showCollapsed();
   }
 
   pi.setLabel("Read-only Mode");
@@ -106,10 +126,6 @@ export default function readonlyMode(pi: ExtensionAPI) {
       }
 
       if (argLower === "audit") {
-        if (mode.current !== "debug") {
-          ctx.ui.notify("Audit trail is only available in Debug mode. Use /readonly debug first.", "warning");
-          return;
-        }
         toggleAudit(ctx);
         return;
       }
@@ -129,7 +145,7 @@ export default function readonlyMode(pi: ExtensionAPI) {
   // Inject mode declaration per configuration
   pi.on("before_agent_start", async (event, ctx) => {
     // Clear previous turn's audit entries (only agent turns, not commands)
-    if (mode.current === "debug") clearAudit();
+    clearAudit();
 
     const injection = mode.buildInjection();
     if (!injection) return;
@@ -160,8 +176,12 @@ export default function readonlyMode(pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     const result = dispatchToolCall(event, mode, ctx.cwd);
 
-    if (result.shouldAudit && !isReadonlyAuditTool(event.toolName)) {
-      recordAudit(event.toolName, auditDetail(event.toolName, event.input));
+    if (isWriteTool(event.toolName)) {
+      recordAudit(
+        event.toolName,
+        auditDetail(event.toolName, event.input),
+        result.block !== undefined,
+      );
     }
 
     return result.block;

@@ -379,16 +379,14 @@ describe("dispatchToolCall", () => {
 
   // ── Build mode: no interception ──
 
-  test("build mode returns no block and no audit", () => {
+  test("build mode returns no block", () => {
     const result = dispatchToolCall({ toolName: "write", input: {} }, mode("build"), cwd);
     expect(result.block).toBeUndefined();
-    expect(result.shouldAudit).toBe(false);
   });
 
   test("build mode allows bash rm (everything is allowed)", () => {
     const result = dispatchToolCall({ toolName: "bash", input: { command: "rm -rf /" } }, mode("build"), cwd);
     expect(result.block).toBeUndefined();
-    expect(result.shouldAudit).toBe(false);
   });
 
   // ── Explore mode: block-level tools ──
@@ -397,7 +395,6 @@ describe("dispatchToolCall", () => {
     const result = dispatchToolCall({ toolName: "write", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("modifies files");
-    expect(result.shouldAudit).toBe(false);
   });
 
   test("explore mode blocks edit", () => {
@@ -435,7 +432,6 @@ describe("dispatchToolCall", () => {
   test("explore mode allows read", () => {
     const result = dispatchToolCall({ toolName: "read", input: {} }, mode("explore"), cwd);
     expect(result.block).toBeUndefined();
-    expect(result.shouldAudit).toBe(false);
   });
 
   test("explore mode allows web_search", () => {
@@ -606,129 +602,109 @@ describe("dispatchToolCall", () => {
 
   // ── Debug mode: expanded access + audit ──
 
-  test("debug mode allows write and flags audit", () => {
+  test("debug mode allows write", () => {
     const result = dispatchToolCall({ toolName: "write", input: {} }, mode("debug"), cwd);
     expect(result.block).toBeUndefined();
-    expect(result.shouldAudit).toBe(true);
   });
 
-  test("debug mode allows edit and flags audit", () => {
+  test("debug mode allows edit", () => {
     const result = dispatchToolCall({ toolName: "edit", input: {} }, mode("debug"), cwd);
     expect(result.block).toBeUndefined();
-    expect(result.shouldAudit).toBe(true);
   });
 
-  test("debug mode allows eval and flags audit", () => {
+  test("debug mode allows eval", () => {
     const result = dispatchToolCall({ toolName: "eval", input: {} }, mode("debug"), cwd);
     expect(result.block).toBeUndefined();
-    expect(result.shouldAudit).toBe(true);
   });
 
-  test("debug mode allows debug tool and flags audit", () => {
+  test("debug mode allows debug tool", () => {
     const result = dispatchToolCall({ toolName: "debug", input: {} }, mode("debug"), cwd);
     expect(result.block).toBeUndefined();
-    expect(result.shouldAudit).toBe(true);
   });
 
   test("debug mode allows browser run", () => {
     const result = dispatchToolCall({ toolName: "browser", input: { action: "run" } }, mode("debug"), cwd);
     expect(result.block).toBeUndefined();
-    expect(result.shouldAudit).toBe(true);
   });
 
-  test("debug mode blocks destructive bash and does NOT flag audit", () => {
+  test("debug mode blocks destructive bash", () => {
     const result = dispatchToolCall({ toolName: "bash", input: { command: "rm file.txt" } }, mode("debug"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("Destructive");
-    expect(result.shouldAudit).toBe(false);
   });
 
-  test("debug mode blocks command chaining and does NOT flag audit", () => {
+  test("debug mode blocks command chaining", () => {
     const result = dispatchToolCall({ toolName: "bash", input: { command: "ls && rm file" } }, mode("debug"), cwd);
     expect(result.block).toBeDefined();
-    expect(result.shouldAudit).toBe(false);
   });
 
-  test("debug mode allows diagnostic bash and flags audit", () => {
+  test("debug mode allows diagnostic bash", () => {
     const result = dispatchToolCall({ toolName: "bash", input: { command: "npm test" } }, mode("debug"), cwd);
     expect(result.block).toBeUndefined();
-    expect(result.shouldAudit).toBe(true);
   });
 
-  test("debug mode blocks destructive git commands and does NOT flag audit", () => {
+  test("debug mode blocks destructive git commands", () => {
     const result = dispatchToolCall({ toolName: "bash", input: { command: "git push origin main" } }, mode("debug"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("Destructive");
-    expect(result.shouldAudit).toBe(false);
   });
 
-  test("debug mode blocks package install and does NOT flag audit", () => {
+  test("debug mode blocks package install", () => {
     const result = dispatchToolCall({ toolName: "bash", input: { command: "npm install pkg" } }, mode("debug"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("Destructive");
-    expect(result.shouldAudit).toBe(false);
   });
 
-  test("debug mode blocks bash output redirection and does NOT flag audit", () => {
+  test("debug mode blocks bash output redirection", () => {
     const result = dispatchToolCall({ toolName: "bash", input: { command: "ls > out.txt" } }, mode("debug"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("redirection");
-    expect(result.shouldAudit).toBe(false);
   });
 
-  test("debug mode blocks sed -i and does NOT flag audit", () => {
+  test("debug mode blocks sed -i", () => {
     const result = dispatchToolCall({ toolName: "bash", input: { command: "sed -i 's/a/b/' file" } }, mode("debug"), cwd);
     expect(result.block).toBeDefined();
     expect(result.block!.reason).toContain("Destructive");
-    expect(result.shouldAudit).toBe(false);
   });
 
-  test("debug mode blocks empty bash command and does NOT flag audit", () => {
+  test("debug mode blocks empty bash command", () => {
     const result = dispatchToolCall({ toolName: "bash", input: { command: "" } }, mode("debug"), cwd);
     expect(result.block).toBeDefined();
-    expect(result.shouldAudit).toBe(false);
   });
 
-  test("debug mode allows task oracle and flags audit", () => {
+  test("debug mode allows task oracle", () => {
     const result = dispatchToolCall({ toolName: "task", input: { agent: "oracle" } }, mode("debug"), cwd);
     expect(result.block).toBeUndefined();
-    expect(result.shouldAudit).toBe(true);
   });
 
-  test("debug mode blocks task designer and does NOT flag audit", () => {
+  test("debug mode blocks task designer", () => {
     const result = dispatchToolCall({ toolName: "task", input: { agent: "designer" } }, mode("debug"), cwd);
     expect(result.block).toBeDefined();
-    expect(result.shouldAudit).toBe(false);
   });
 
-  test("debug mode read is allowed but still flags audit (caller filters)", () => {
+  test("debug mode read is allowed", () => {
     const result = dispatchToolCall({ toolName: "read", input: {} }, mode("debug"), cwd);
     expect(result.block).toBeUndefined();
-    expect(result.shouldAudit).toBe(true);
   });
 
-  test("debug mode allows task explore agent and flags audit", () => {
+  test("debug mode allows task explore agent", () => {
     const result = dispatchToolCall({ toolName: "task", input: { agent: "explore" } }, mode("debug"), cwd);
     expect(result.block).toBeUndefined();
-    expect(result.shouldAudit).toBe(true);
   });
 
-  test("debug mode blocks task 'task' agent and does NOT flag audit", () => {
+  test("debug mode blocks task 'task' agent", () => {
     const result = dispatchToolCall({ toolName: "task", input: { agent: "task" } }, mode("debug"), cwd);
     expect(result.block).toBeDefined();
-    expect(result.shouldAudit).toBe(false);
   });
 
-  test("debug mode blocks task quick_task agent and does NOT flag audit", () => {
+  test("debug mode blocks task quick_task agent", () => {
     const result = dispatchToolCall({ toolName: "task", input: { agent: "quick_task" } }, mode("debug"), cwd);
     expect(result.block).toBeDefined();
-    expect(result.shouldAudit).toBe(false);
   });
 
-  test("debug mode blocks task with missing agent and does NOT flag audit", () => {
+  test("debug mode blocks task with missing agent", () => {
     const result = dispatchToolCall({ toolName: "task", input: {} }, mode("debug"), cwd);
     expect(result.block).toBeDefined();
-    expect(result.shouldAudit).toBe(false);
   });
 
   // ── formatBlock integration: hints become formatted suffixes ──
