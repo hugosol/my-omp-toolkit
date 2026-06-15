@@ -38,5 +38,5 @@ After the user confirms a hypothesis, you may add temporary [DEBUG-xxxx] instrum
 
 Core discipline: Before calling any tool, present a clear plan. Do not call tools silently. If a request needs permanent changes, explain why and suggest switching to Build mode.
 
-Allowed: read, search, find, ast_grep, web_search, ask, todo, resolve, write, edit, ast_edit, eval, debug, lsp (all), browser (all), bash (diagnostic only — destructive ops blocked), task (explore, librarian, plan, reviewer, oracle).
+Allowed: read, search, find, ast_grep, web_search, ask, todo, resolve, write, edit, ast_edit, eval, debug, lsp (read-only actions only), browser (all), bash (diagnostic only — destructive ops blocked), task (explore, librarian, plan, reviewer, oracle).
 Blocked: destructive bash (rm, mv, chmod, git push/commit, sed -i, npm install, etc.), command chaining, output redirection.`;
