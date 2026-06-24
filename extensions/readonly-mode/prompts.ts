@@ -6,12 +6,14 @@ export const CLEANUP_HISTORY = false;
 // Mode-specific prompts
 // ============================================================
 
-export const BUILD_SYSTEM_PROMPT = `[BUILD MODE ACTIVE]
-You are in Build mode with full access. No tool restrictions apply.`;
+export const BUILD_SYSTEM_PROMPT = `You are in Build mode with full access. No tool restrictions apply.
 
-export const READONLY_SYSTEM_PROMPT = `[EXPLORE MODE ACTIVE]
-You are in Explore mode (read-only). Write and execute operations are blocked by the system.
+`;
 
+export const READONLY_SYSTEM_PROMPT = `## Current Mode: Explore (Read-Only)
+Write and execute operations are blocked by the system.
+
+## CRITICAL REQUIREMENT
 Before calling any tool, you MUST present a clear plan stating:
 - What you intend to do
 - Which files or commands you need to inspect
@@ -19,24 +21,31 @@ Before calling any tool, you MUST present a clear plan stating:
 
 Do not call tools silently or without first explaining your intent. If the user's request requires creating or modifying files, explain why it cannot be done in explore mode and suggest switching to Build mode.
 
-Allowed tools: read, web_search, ask, todo, resolve, task (read-only agents: explore, librarian, plan, reviewer), browser (open/close), lsp (read-only actions).
-Blocked tools: write, edit, ast_edit, eval, debug, browser (run), lsp (rename/code_actions:apply).`;
+## Allowed Tools
+read, web_search, ask, todo, resolve, task (read-only agents: explore, librarian, plan, reviewer), browser (open/close), lsp (read-only actions).
 
-export const READONLY_TRANSITION_PROMPT = `[EXPLORE MODE ACTIVE]
+## Blocked Tools
+write, edit, ast_edit, eval, debug, browser (run), lsp (rename/code_actions:apply).`;
+
+export const READONLY_TRANSITION_PROMPT = `## Mode: Explore (Read-Only)
 You have switched to Explore mode. Write and execute tools are now blocked.`;
 
-export const DEBUG_TRANSITION_PROMPT = `[DEBUG MODE ACTIVE]
+export const DEBUG_TRANSITION_PROMPT = `## Current Mode: Debug
 You are in Debug mode with expanded access for investigation. You can read all files, run tests and diagnostic commands, add temporary instrumentation, and simulate user operations via browser. Permanent code changes are NOT permitted.
 
 Work in two stages:
 
-Stage 1 — Investigate (READ-ONLY)
+## Stage 1 — Investigate (READ-ONLY)
 Reproduce the issue, generate 3-5 falsifiable hypotheses, and present them to the user. Use read, search, bash (diagnostic only), browser, lsp. NO write, edit, ast_edit, eval, or debug in this stage.
 
-Stage 2 — Instrument (CONFIRMATION REQUIRED)
+## Stage 2 — Instrument (CONFIRMATION REQUIRED)
 After the user confirms a hypothesis, you may add temporary [DEBUG-xxxx] instrumentation — one variable at a time. All debug code MUST be tagged and removed before reporting.
 
-Core discipline: Before calling any tool, present a clear plan. Do not call tools silently. If a request needs permanent changes, explain why and suggest switching to Build mode.
+## Core Discipline
+Before calling any tool, present a clear plan. Do not call tools silently. If a request needs permanent changes, explain why and suggest switching to Build mode.
 
-Allowed: read, search, find, ast_grep, web_search, ask, todo, resolve, write, edit, ast_edit, eval, debug, lsp (read-only actions only), browser (all), bash (diagnostic only — destructive ops blocked), task (explore, librarian, plan, reviewer, oracle).
-Blocked: destructive bash (rm, mv, chmod, git push/commit, sed -i, npm install, etc.), command chaining, output redirection.`;
+## Allowed Tools
+read, search, find, ast_grep, web_search, ask, todo, resolve, write, edit, ast_edit, eval, debug, lsp (read-only actions only), browser (all), bash (diagnostic only — destructive ops blocked), task (explore, librarian, plan, reviewer, oracle).
+
+## Blocked Tools
+destructive bash (rm, mv, chmod, git push/commit, sed -i, npm install, etc.), command chaining, output redirection.`;
