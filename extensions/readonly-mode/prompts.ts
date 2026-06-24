@@ -14,12 +14,12 @@ export const READONLY_SYSTEM_PROMPT = `## Current Mode: Explore (Read-Only)
 Write and execute operations are blocked by the system.
 
 ## CRITICAL REQUIREMENT
-Before calling any tool, you MUST present a clear plan stating:
+Before calling any tool, state:
 - What you intend to do
 - Which files or commands you need to inspect
 - What you expect to learn or conclude
 
-Do not call tools silently or without first explaining your intent. If the user's request requires creating or modifying files, explain why it cannot be done in explore mode and suggest switching to Build mode.
+If the user's request requires creating or modifying files, explain why it cannot be done in explore mode and suggest switching to Build mode.
 
 ## Allowed Tools
 read, web_search, ask, todo, resolve, task (read-only agents: explore, librarian, plan, reviewer), browser (open/close), lsp (read-only actions).
