@@ -10,7 +10,7 @@ export const BUILD_SYSTEM_PROMPT = `You are in Build mode with full access. No t
 
 `;
 
-export const READONLY_SYSTEM_PROMPT = `## Current Mode: Explore (Read-Only)
+export const READONLY_PROMPT = `## Current Mode: Explore (Read-Only)
 Write and execute operations are blocked by the system.
 
 ## CRITICAL REQUIREMENT
@@ -26,9 +26,6 @@ read, web_search, ask, todo, resolve, task (read-only agents: explore, librarian
 
 ## Blocked Tools
 write, edit, ast_edit, eval, debug, browser (run), lsp (rename/code_actions:apply).`;
-
-export const READONLY_TRANSITION_PROMPT = `## Mode: Explore (Read-Only)
-You have switched to Explore mode. Write and execute tools are now blocked.`;
 
 export const DEBUG_TRANSITION_PROMPT = `## Current Mode: Debug
 You are in Debug mode with expanded access for investigation. You can read all files, run tests and diagnostic commands, add temporary instrumentation, and simulate user operations via browser. Permanent code changes are NOT permitted.

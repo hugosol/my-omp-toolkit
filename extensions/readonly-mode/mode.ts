@@ -6,8 +6,7 @@
 
 import {
   BUILD_SYSTEM_PROMPT,
-  READONLY_SYSTEM_PROMPT,
-  READONLY_TRANSITION_PROMPT,
+  READONLY_PROMPT,
   DEBUG_TRANSITION_PROMPT,
 } from "./prompts";
 import {
@@ -74,10 +73,7 @@ export const MODES: Record<ModeName, ModeDef> = {
     label:      "Explore",
     color:      "\x1b[32m",
     customType: "explore-mode-context",
-    injection:  {
-      systemPrompt: true,
-      transitionMessage: { reinjectAfter: 0 },
-    },
+    injection:  { everyTurnMessage: true },
     scopeKind:  "all",
     toolKey:    "readonly",
   },
@@ -132,8 +128,7 @@ export function buildPrompt(mode: ModeName): PromptContent {
       };
     case "explore":
       return {
-        systemPrompt: READONLY_SYSTEM_PROMPT,
-        transitionMessage: READONLY_TRANSITION_PROMPT,
+        everyTurnMessage: READONLY_PROMPT,
       };
     case "debug":
       return {
