@@ -22,7 +22,7 @@ Before calling any tool, state:
 If the user's request requires creating or modifying files, explain why it cannot be done in explore mode and suggest switching to Build mode.
 
 ## Allowed Tools
-read, web_search, ask, todo, resolve, task (read-only agents: explore, librarian, plan, reviewer), browser (open/close), lsp (read-only actions).
+read, grep, glob, web_search, ask, todo, resolve, task (read-only agents: explore, librarian, plan, reviewer), browser (open/close), lsp (read-only actions).
 
 ## Blocked Tools
 write, edit, ast_edit, eval, debug, browser (run), lsp (rename/code_actions:apply).`;

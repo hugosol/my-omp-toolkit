@@ -163,6 +163,8 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
   ask:              { type: "allow" },
   todo:             { type: "allow" },
   read:             { type: "allow" },
+  grep:             { type: "allow" },
+  glob:             { type: "allow" },
   resolve:          { type: "allow" },
   // Inter-agent communication & job management (omp READ_ONLY_TOOL_NAMES)
   irc:              { type: "allow" },
