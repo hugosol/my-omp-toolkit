@@ -12,17 +12,27 @@ const READONLY_COMMANDS = [
   "printf", "which", "where", "type", "env", "printenv", "date", "whoami", "id",
   "uname", "uptime", "dirname", "basename", "realpath", "readlink", "cksum",
   "md5sum", "sha1sum", "sha256sum", "ps", "jobs", "tree", "awk", "jq", "sed",
+  "cd", "pushd", "popd",
   "codebase-memory-mcp",
 ] as const;
 
-// --- Git read-only subcommands ---
-const GIT_READONLY_SUBCOMMANDS = [
-  "log", "diff", "show", "status", "branch", "tag", "describe", "ls-files",
-  "ls-tree", "rev-parse", "rev-list", "cat-file", "check-ignore", "check-attr",
-  "check-mailmap", "check-ref-format", "config", "remote", "help", "version",
-  "merge-base", "name-rev", "shortlog", "stash list", "worktree list",
-  "submodule status",
-] as const;
+// --- Git blacklist — subcommands blocked in read-only mode ---
+const GIT_BLOCKED_SUBCOMMANDS = new Set([
+  "commit", "merge", "rebase", "cherry-pick", "revert", "am",
+  "push", "pull",
+  "add", "mv", "rm",
+  "reset", "checkout", "switch", "restore",
+  "stash",
+  "tag",
+  "branch",
+  "worktree",
+]);
+
+// Multi-word subcommands that override the blacklist
+const GIT_ALLOWED_MULTI = new Set([
+  "stash list",
+  "worktree list",
+]);
 
 // --- Ecosystem tools → read-only subcommands ---
 const ECO_READONLY: Record<string, readonly string[]> = {
@@ -49,9 +59,58 @@ export const BASH_READONLY_PATTERN = new RegExp(
   `^(?:command\\s+(?:-v\\s+)?)?(?:sudo\\s+)?(?:${buildAlt(READONLY_COMMANDS)})\\b`,
 );
 
-export const GIT_READONLY_PATTERN = new RegExp(
-  `^(?:sudo\\s+)?git\\s+(?:${buildAlt(GIT_READONLY_SUBCOMMANDS)})\\b`,
-);
+/** Extract the git subcommand and its args, skipping global flags like -C, -c, --no-pager. */
+function extractGitSubcommand(command: string): { subcommand: string; args: string[] } | null {
+  const tokens = command.split(/\s+/);
+  let i = 0;
+  if (tokens[i] === "sudo") i++;
+  if (i >= tokens.length || tokens[i] !== "git") return null;
+  i++;
+  // Skip global flags before subcommand
+  while (i < tokens.length && tokens[i].startsWith("-")) {
+    const flag = tokens[i];
+    if (flag === "-C" || flag === "-c") {
+      i += 2; // flag + value
+    } else if (flag.includes("=")) {
+      i += 1; // --flag=value
+    } else {
+      i += 1; // boolean flag
+    }
+  }
+  if (i >= tokens.length) return null;
+  return { subcommand: tokens[i], args: tokens.slice(i + 1) };
+}
+
+/** Check whether a git command uses a blocked subcommand. Returns block result if blocked, undefined if allowed. */
+function checkGitBlocked(command: string): BlockResult | undefined {
+  const extracted = extractGitSubcommand(command);
+  if (!extracted) return undefined; // not a git command
+
+  const { subcommand, args } = extracted;
+  const firstArg = args[0] ?? "";
+  const fullCmd = firstArg ? `${subcommand} ${firstArg}` : subcommand;
+
+  // Whitelist: multi-word reads
+  if (GIT_ALLOWED_MULTI.has(fullCmd)) return undefined;
+
+  // Whitelist: bare tag listing
+  if (subcommand === "tag" && (args.length === 0 || firstArg === "-l" || firstArg === "--list")) return undefined;
+
+  // Whitelist: bare branch listing
+  if (subcommand === "branch" && (args.length === 0 || firstArg === "-l" || firstArg === "--list")) return undefined;
+
+  // Blacklist check
+  if (GIT_BLOCKED_SUBCOMMANDS.has(subcommand)) {
+    return {
+      block: true,
+      reason: `Git subcommand '${subcommand}' is blocked in read-only mode.`,
+      hint: "switch_to_build",
+    };
+  }
+
+  // Default: allow (git log, git clone, git fetch, git remote, etc.)
+  return undefined;
+}
 
 export const ECO_READONLY_PATTERN = new RegExp(
   `^(?:sudo\\s+)?(?:${
@@ -60,8 +119,6 @@ export const ECO_READONLY_PATTERN = new RegExp(
       .join("|")
   })\\b`,
 );
-// Blocked patterns: command chaining
-export const BASH_BLOCKED_CHAIN = /&&|\|\||;\s*\S|`|\$\(/;
 // Blocked patterns: output redirection
 export const BASH_BLOCKED_REDIRECT = /\s[>&]+\s*[^>&\s]/;
 export const BASH_BLOCKED_TEE = /\|\s*tee\b/;
@@ -90,6 +147,8 @@ export const DEBUG_BASH_BLOCKED: RegExp[] = [
   /^(?:\s*sudo\s+)?git\s+(?:push|commit|merge|rebase|reset\s+--hard|tag\s+-d|checkout\s+-b|branch\s+-D|stash\s+drop|stash\s+clear)\b/,
   // In-place editing
   /^(?:\s*sudo\s+)?sed\b.*-i\b/,
+  // File writing (tee, redirect helpers)
+  /^(?:\s*sudo\s+)?tee\b/,
   // Package management (install / remove deps changes the project)
   /^(?:\s*sudo\s+)?(?:npm|yarn|pnpm|pip|pip3|apt|apt-get|brew|cargo)\s+(?:install|uninstall|update|upgrade|remove|purge|add|publish|ci)\b/,
 ];
@@ -134,7 +193,7 @@ export const DEBUG_TASK_AGENTS = new Set([
 export type PolicyType = "allow" | "block" | "check";
 
 /** Prefix for codebase-memory MCP tools — all are treated as read-only. */
-export const CODEBASE_MEMORY_PREFIX = "mcp__codebase_memory_mcp__";
+export const CODEBASE_MEMORY_PREFIX = "mcp__codebase_memory_mcp_";
 
 export type BlockHint = "switch_to_build" | "use_alternative" | "silent";
 
@@ -258,6 +317,211 @@ export function formatBlock(r: BlockResult): { block: true; reason: string } {
 }
 
 // ============================================================
+// Command splitting — chain operators, pipes, quoting
+// ============================================================
+
+/** Split a bash command on chain operators (&&, ||, ;) and pipes (|),
+ *  respecting single/double quotes, backticks, and $(…) nesting. */
+function splitCommands(command: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let i = 0;
+
+  while (i < command.length) {
+    const ch = command[i];
+
+    // Single quote: consume until closing '
+    if (ch === "'") {
+      const end = command.indexOf("'", i + 1);
+      current += end === -1 ? command.slice(i) : command.slice(i, end + 1);
+      i = end === -1 ? command.length : end + 1;
+      continue;
+    }
+
+    // Double quote: consume until unescaped "
+    if (ch === '"') {
+      current += ch;
+      i++;
+      while (i < command.length && command[i] !== '"') {
+        if (command[i] === '\\') { current += command[i]; i++; }
+        if (i < command.length) { current += command[i]; i++; }
+      }
+      if (i < command.length) { current += command[i]; i++; } // closing "
+      continue;
+    }
+
+    // Backtick: consume until closing `
+    if (ch === "`") {
+      const end = command.indexOf("`", i + 1);
+      current += end === -1 ? command.slice(i) : command.slice(i, end + 1);
+      i = end === -1 ? command.length : end + 1;
+      continue;
+    }
+
+    // $( — consume until matching )
+    if (ch === "$" && command[i + 1] === "(") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < command.length && depth > 0) {
+        if (command[j] === "(") depth++;
+        else if (command[j] === ")") depth--;
+        j++;
+      }
+      current += command.slice(i, j);
+      i = j;
+      continue;
+    }
+
+    // && operator
+    if (ch === "&" && command[i + 1] === "&") {
+      if (current.trim()) segments.push(current.trim());
+      current = "";
+      i += 2;
+      continue;
+    }
+
+    // || operator
+    if (ch === "|" && command[i + 1] === "|") {
+      if (current.trim()) segments.push(current.trim());
+      current = "";
+      i += 2;
+      continue;
+    }
+
+    // | (single pipe)
+    if (ch === "|") {
+      if (current.trim()) segments.push(current.trim());
+      current = "";
+      i += 1;
+      continue;
+    }
+
+    // ; separator (only when followed by non-whitespace — lone ; is harmless)
+    if (ch === ";") {
+      if (current.trim()) segments.push(current.trim());
+      current = "";
+      i += 1;
+      // skip whitespace after ;
+      while (i < command.length && /\s/.test(command[i])) i++;
+      continue;
+    }
+
+    current += ch;
+    i++;
+  }
+
+  if (current.trim()) segments.push(current.trim());
+  return segments;
+}
+
+/** Extract sub-commands from $(…) and backtick substitutions for separate validation. */
+function extractSubCommands(cmd: string): string[] {
+  const subs: string[] = [];
+  let i = 0;
+
+  while (i < cmd.length) {
+    // Skip quoted regions
+    if (cmd[i] === "'") {
+      const end = cmd.indexOf("'", i + 1);
+      i = end === -1 ? cmd.length : end + 1;
+      continue;
+    }
+    if (cmd[i] === '"') {
+      i++;
+      while (i < cmd.length && cmd[i] !== '"') {
+        if (cmd[i] === '\\') i++;
+        i++;
+      }
+      if (i < cmd.length) i++; // closing "
+      continue;
+    }
+
+    // $()
+    if (cmd[i] === "$" && cmd[i + 1] === "(") {
+      let depth = 1;
+      let j = i + 2;
+      const start = j;
+      while (j < cmd.length && depth > 0) {
+        if (cmd[j] === "(") depth++;
+        else if (cmd[j] === ")") depth--;
+        j++;
+      }
+      const inner = cmd.slice(start, j - 1).trim();
+      if (inner) subs.push(inner);
+      i = j;
+      continue;
+    }
+
+    // Backtick
+    if (cmd[i] === "`") {
+      const end = cmd.indexOf("`", i + 1);
+      if (end !== -1) {
+        const inner = cmd.slice(i + 1, end).trim();
+        if (inner) subs.push(inner);
+        i = end + 1;
+        continue;
+      }
+    }
+
+    i++;
+  }
+
+  return subs;
+}
+
+/** Validate a single command segment against all read-only policies. */
+function checkSingleCommand(cmd: string): BlockResult | undefined {
+  if (!cmd.trim()) return undefined;
+
+  // Block output redirection
+  if (BASH_BLOCKED_REDIRECT.test(cmd) || BASH_BLOCKED_TEE.test(cmd)) {
+    return {
+      block: true,
+      reason: "Output redirection (>, >>, &>, | tee) is not allowed.",
+      hint: "use_alternative",
+      alternatives: ["Use the read tool to view file content", "Pipe to stdout without redirecting"],
+    };
+  }
+
+  // Block tee (file-writing command, often used with pipes)
+  if (/^\s*tee\b/.test(cmd)) {
+    return {
+      block: true,
+      reason: "tee writes to files.",
+      hint: "use_alternative",
+      alternatives: ["Use the read tool to view content"],
+    };
+  }
+
+  // Block sed -i (in-place editing)
+  if (/^\s*sed\b/.test(cmd) && /\s-i\b/.test(cmd)) {
+    return {
+      block: true,
+      reason: "sed -i performs in-place editing.",
+      hint: "use_alternative",
+      alternatives: ["Use sed without -i for read-only filtering"],
+    };
+  }
+
+  // Git check (blacklist-based)
+  if (/^(?:sudo\s+)?git\b/.test(cmd)) {
+    const blocked = checkGitBlocked(cmd);
+    if (blocked) return blocked;
+    return undefined; // git command, allowed
+  }
+
+  // Whitelist check
+  if (BASH_READONLY_PATTERN.test(cmd)) return undefined;
+  if (ECO_READONLY_PATTERN.test(cmd)) return undefined;
+
+  return {
+    block: true,
+    reason: "Command not in read-only whitelist. Allowed: ls, cat, grep, rg, find, stat, awk, jq, sed, git log/diff/show, npm ls, cargo tree, pip list, node --version, etc.",
+    hint: "silent",
+  };
+}
+
+// ============================================================
 // Guard functions — each check-type tool carries one of these.
 // Moved here from checks.ts so policy data and check logic live
 // together. Adding a tool restriction = one table entry edit.
@@ -268,46 +532,27 @@ export function checkBash(event: { input: unknown }, _ctx: CheckContext): BlockR
   const command = (input.command ?? "").trim();
   if (!command) return { block: true, reason: "Empty bash command.", hint: "silent" };
 
-  // 1. Block command chaining → suggest running one at a time
-  if (BASH_BLOCKED_CHAIN.test(command)) {
-    return {
-      block: true,
-      reason: "Command chaining (&&, ||, ;, `, $()) is not allowed.",
-      hint: "use_alternative",
-      alternatives: ["Run one read-only command at a time"],
-    };
+  // 1. Split the command on chain operators and pipes
+  const segments = splitCommands(command);
+
+  // 2. Validate each segment AND any sub-commands within them
+  for (const seg of segments) {
+    const result = checkSingleCommand(seg);
+    if (result) {
+      // Add context about which segment failed
+      result.reason = `Command segment "${seg.length > 60 ? seg.slice(0, 57) + "..." : seg}" blocked: ${result.reason.toLowerCase()}`;
+      return result;
+    }
+
+    // Check $() and backtick sub-commands within this segment
+    const subs = extractSubCommands(seg);
+    for (const sub of subs) {
+      const subResult = checkSingleCommand(sub);
+      if (subResult) return subResult;
+    }
   }
 
-  // 2. Block output redirection → suggest read tool
-  if (BASH_BLOCKED_REDIRECT.test(command) || BASH_BLOCKED_TEE.test(command)) {
-    return {
-      block: true,
-      reason: "Output redirection (>, >>, &>, | tee) is not allowed.",
-      hint: "use_alternative",
-      alternatives: ["Use the read tool to view file content", "Pipe to stdout without redirecting"],
-    };
-  }
-
-  // 3. Block sed -i (in-place editing) → suggest sed without -i
-  if (/^\s*sed\b/.test(command) && /\s-i\b/.test(command)) {
-    return {
-      block: true,
-      reason: "sed -i performs in-place editing.",
-      hint: "use_alternative",
-      alternatives: ["Use sed without -i for read-only filtering"],
-    };
-  }
-
-  // 4. Check command whitelist
-  if (BASH_READONLY_PATTERN.test(command)) return undefined;
-  if (GIT_READONLY_PATTERN.test(command)) return undefined;
-  if (ECO_READONLY_PATTERN.test(command)) return undefined;
-
-  return {
-    block: true,
-    reason: "Command not in read-only whitelist. Allowed: ls, cat, grep, rg, find, stat, awk, jq, sed, git log/diff/show, npm ls, cargo tree, pip list, node --version, etc.",
-    hint: "silent",
-  };
+  return undefined; // all segments passed
 }
 
 export function checkSearchPaths(
@@ -423,34 +668,45 @@ export function checkDebugBash(event: { input: unknown }, _ctx: CheckContext): B
   const command = (input.command ?? "").trim();
   if (!command) return { block: true, reason: "Empty bash command.", hint: "silent" };
 
-  // 1. Block command chaining
-  if (BASH_BLOCKED_CHAIN.test(command)) {
-    return {
-      block: true,
-      reason: "Command chaining (&&, ||, ;, `, $()) is not allowed in Debug mode.",
-      hint: "use_alternative",
-      alternatives: ["Run one command at a time"],
-    };
-  }
+  // 1. Split on chain operators and pipes — each segment checked independently
+  const segments = splitCommands(command);
 
-  // 2. Block output redirection
-  if (BASH_BLOCKED_REDIRECT.test(command) || BASH_BLOCKED_TEE.test(command)) {
-    return {
-      block: true,
-      reason: "Output redirection (>, >>, &>, | tee) is not allowed in Debug mode.",
-      hint: "use_alternative",
-      alternatives: ["Use the read or write tool instead"],
-    };
-  }
+  for (const seg of segments) {
+    if (!seg.trim()) continue;
 
-  // 3. Block destructive commands
-  for (const pattern of DEBUG_BASH_BLOCKED) {
-    if (pattern.test(command)) {
+    // Block output redirection
+    if (BASH_BLOCKED_REDIRECT.test(seg) || BASH_BLOCKED_TEE.test(seg)) {
       return {
         block: true,
-        reason: "Destructive command blocked in Debug mode.",
-        hint: "silent",
+        reason: "Output redirection (>, >>, &>, | tee) is not allowed in Debug mode.",
+        hint: "use_alternative",
+        alternatives: ["Use the read or write tool instead"],
       };
+    }
+
+    // Block destructive commands
+    for (const pattern of DEBUG_BASH_BLOCKED) {
+      if (pattern.test(seg)) {
+        return {
+          block: true,
+          reason: "Destructive command blocked in Debug mode.",
+          hint: "silent",
+        };
+      }
+    }
+
+    // Check $() and backtick sub-commands
+    const subs = extractSubCommands(seg);
+    for (const sub of subs) {
+      for (const pattern of DEBUG_BASH_BLOCKED) {
+        if (pattern.test(sub)) {
+          return {
+            block: true,
+            reason: "Destructive sub-command blocked in Debug mode.",
+            hint: "silent",
+          };
+        }
+      }
     }
   }
 

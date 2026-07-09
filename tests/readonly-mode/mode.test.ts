@@ -120,6 +120,14 @@ describe("resolveToolPolicy", () => {
     expect(policy.reason).toBe(DEFAULT_POLICY.reason);
   });
 
+  test("readonly toolKey allows MCP codebase-memory tools via prefix", () => {
+    expect(resolveToolPolicy("mcp__codebase_memory_mcp_list_projects", "readonly").type).toBe("allow");
+    expect(resolveToolPolicy("mcp__codebase_memory_mcp_get_architecture", "readonly").type).toBe("allow");
+    expect(resolveToolPolicy("mcp__codebase_memory_mcp_index_repository", "readonly").type).toBe("allow");
+    // Non-matching MCP tools still fall through
+    expect(resolveToolPolicy("mcp__other_server__tool", "readonly").type).toBe("block");
+  });
+
   test("debug toolKey allows write/edit for instrumentation", () => {
     expect(resolveToolPolicy("write", "debug").type).toBe("allow");
     expect(resolveToolPolicy("edit", "debug").type).toBe("allow");
@@ -757,7 +765,8 @@ describe("dispatchToolCall", () => {
     const result = dispatchToolCall({ toolName: "bash", input: { command: "rm -rf /" } }, mode("explore"), cwd);
     expect(result.block!.reason).not.toContain("/readonly");
     expect(result.block!.reason).not.toContain("Instead try");
-  });
+  });
+
 
   // Codebase Memory MCP tools
   test("explore mode allows codebase-memory MCP tools", () => {

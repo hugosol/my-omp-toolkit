@@ -24,9 +24,81 @@ describe("checkBash", () => {
   });
 
   test("allows git read-only subcommands", () => {
-    const allowed = ["git log", "git diff", "git status", "git show HEAD", "git branch", "git stash list"];
+    const allowed = [
+      "git log", "git diff", "git status", "git show HEAD",
+      "git branch", "git branch -l", "git branch --list",
+      "git stash list", "git worktree list",
+      "git tag", "git tag -l",
+      "git remote -v", "git config --list",
+      "git ls-files", "git rev-parse HEAD", "git describe",
+      "git clone https://example.com/repo.git",
+      "git fetch", "git fetch origin",
+    ];
     for (const cmd of allowed) {
       expect(checkBash({ input: { command: cmd } })).toBeUndefined();
+    }
+  });
+
+  test("allows git with global flags before subcommand", () => {
+    const allowed = [
+      'git -C "E:/some/path" log',
+      "git -C /tmp log --oneline",
+      "git --no-pager diff",
+      "git -c user.name=test log",
+      "git --git-dir=/tmp/.git status",
+      "git --bare --no-pager show HEAD",
+    ];
+    for (const cmd of allowed) {
+      expect(checkBash({ input: { command: cmd } })).toBeUndefined();
+    }
+  });
+
+  test("blocks git destructive subcommands", () => {
+    const blocked = [
+      "git commit -m x",
+      "git push",
+      "git pull",
+      "git merge main",
+      "git rebase main",
+      "git cherry-pick abc",
+      "git revert HEAD",
+      "git am patch",
+      "git add file.txt",
+      "git mv old.txt new.txt",
+      "git rm file.txt",
+      "git reset HEAD~1",
+      "git reset --hard",
+      "git checkout main",
+      "git checkout -b new-branch",
+      "git switch main",
+      "git restore file.txt",
+      "git stash",
+      "git stash drop",
+      "git stash clear",
+      "git stash pop",
+      "git tag v1.0",
+      "git tag -d v1.0",
+      "git branch -D old-branch",
+      "git branch new-branch",
+      "git worktree add ../path",
+    ];
+    for (const cmd of blocked) {
+      const result = checkBash({ input: { command: cmd } });
+      expect(result).toBeDefined();
+      expect(result!.reason).toMatch(/git/i);
+    }
+  });
+
+  test("blocks git destructive with global flags", () => {
+    const blocked = [
+      "git -C /tmp commit -m x",
+      "git --no-pager push origin main",
+      "git -C /tmp checkout main",
+    ];
+    for (const cmd of blocked) {
+      const result = checkBash({ input: { command: cmd } });
+      expect(result).toBeDefined();
+      expect(result!.reason).toMatch(/git/i);
     }
   });
 
@@ -60,35 +132,47 @@ describe("checkBash", () => {
     expect(result!.reason).toContain("Empty");
   });
 
-  test("blocks command chaining with &&", () => {
-    const result = checkBash({ input: { command: "ls && rm file" } });
-    expect(result).toBeDefined();
-    expect(result!.reason).toContain("chaining");
-    expect(result!.hint).toBe("use_alternative");
+  test("allows command chaining when all segments are read-only", () => {
+    // || — both read-only
+    expect(checkBash({ input: { command: "ls || echo fail" } })).toBeUndefined();
+    // && — both read-only
+    expect(checkBash({ input: { command: "ls && echo ok" } })).toBeUndefined();
+    expect(checkBash({ input: { command: "pwd && whoami" } })).toBeUndefined();
+    // ; — both read-only
+    expect(checkBash({ input: { command: "pwd; ls" } })).toBeUndefined();
+    // | pipe — both read-only
+    expect(checkBash({ input: { command: "cat file | grep pattern" } })).toBeUndefined();
+    expect(checkBash({ input: { command: "git log | head -5" } })).toBeUndefined();
+    // $() — both read-only
+    expect(checkBash({ input: { command: "echo $(whoami)" } })).toBeUndefined();
+    // backtick — both read-only
+    expect(checkBash({ input: { command: "echo `whoami`" } })).toBeUndefined();
+    // Mixed chain operators
+    expect(checkBash({ input: { command: "ls && echo ok || pwd" } })).toBeUndefined();
   });
 
-  test("blocks command chaining with ||", () => {
-    const result = checkBash({ input: { command: "ls || echo fail" } });
-    expect(result).toBeDefined();
-    expect(result!.reason).toContain("chaining");
+  test("blocks command chaining when any segment is not read-only", () => {
+    // && with destructive
+    expect(checkBash({ input: { command: "ls && rm file" } })).toBeDefined();
+    // || with destructive
+    expect(checkBash({ input: { command: "ls || rm file" } })).toBeDefined();
+    // ; with destructive
+    expect(checkBash({ input: { command: "ls; rm file" } })).toBeDefined();
+    // | pipe to tee
+    expect(checkBash({ input: { command: "cat file | tee out.txt" } })).toBeDefined();
+    // $() with destructive
+    expect(checkBash({ input: { command: "echo $(rm file)" } })).toBeDefined();
+    // chained git destructive
+    expect(checkBash({ input: { command: "git log && git push" } })).toBeDefined();
   });
 
-  test("blocks command chaining with ;", () => {
-    const result = checkBash({ input: { command: "ls; rm file" } });
-    expect(result).toBeDefined();
-    expect(result!.reason).toContain("chaining");
-  });
-
-  test("blocks command substitution with backticks", () => {
-    const result = checkBash({ input: { command: "echo `whoami`" } });
-    expect(result).toBeDefined();
-    expect(result!.reason).toContain("chaining");
-  });
-
-  test("blocks command substitution with $()", () => {
-    const result = checkBash({ input: { command: "echo $(whoami)" } });
-    expect(result).toBeDefined();
-    expect(result!.reason).toContain("chaining");
+  test("does not split on operators inside quotes", () => {
+    // || inside single quotes
+    expect(checkBash({ input: { command: "echo 'a || b'" } })).toBeUndefined();
+    // || inside double quotes
+    expect(checkBash({ input: { command: 'echo "a || b"' } })).toBeUndefined();
+    // ; inside quotes
+    expect(checkBash({ input: { command: "echo 'a;b'" } })).toBeUndefined();
   });
 
   test("blocks output redirection >> (append)", () => {
@@ -106,7 +190,7 @@ describe("checkBash", () => {
   test("blocks tee pipe", () => {
     const result = checkBash({ input: { command: "ls | tee out.txt" } });
     expect(result).toBeDefined();
-    expect(result!.reason).toContain("redirection");
+    expect(result!.reason).toMatch(/tee/i);
   });
 
   test("blocks sed -i (in-place editing)", () => {
@@ -341,7 +425,7 @@ describe("checkDebugBash", () => {
   test("blocks command chaining", () => {
     const result = checkDebugBash({ input: { command: "ls && rm file" } });
     expect(result).toBeDefined();
-    expect(result!.reason).toContain("chaining");
+    expect(result!.reason).toContain("Destructive");
   });
 
   test("blocks output redirection", () => {

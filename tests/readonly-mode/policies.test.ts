@@ -109,7 +109,11 @@ describe("DEFAULT_POLICY", () => {
 // ============================================================
 
 describe("CODEBASE_MEMORY_PREFIX", () => {
-  test("is correctly formatted", () => {
-    expect(CODEBASE_MEMORY_PREFIX).toBe("mcp__codebase_memory_mcp__");
+  test("matches actual MCP tool names", () => {
+    expect(CODEBASE_MEMORY_PREFIX).toBe("mcp__codebase_memory_mcp_");
+    // Verify it matches the actual tool naming convention
+    expect("mcp__codebase_memory_mcp_list_projects".startsWith(CODEBASE_MEMORY_PREFIX)).toBe(true);
+    expect("mcp__codebase_memory_mcp_get_architecture".startsWith(CODEBASE_MEMORY_PREFIX)).toBe(true);
+    expect("mcp__codebase_memory_mcp_index_repository".startsWith(CODEBASE_MEMORY_PREFIX)).toBe(true);
   });
 });
