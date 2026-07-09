@@ -12,6 +12,7 @@ const READONLY_COMMANDS = [
   "printf", "which", "where", "type", "env", "printenv", "date", "whoami", "id",
   "uname", "uptime", "dirname", "basename", "realpath", "readlink", "cksum",
   "md5sum", "sha1sum", "sha256sum", "ps", "jobs", "tree", "awk", "jq", "sed",
+  "codebase-memory-mcp",
 ] as const;
 
 // --- Git read-only subcommands ---
@@ -131,6 +132,9 @@ export const DEBUG_TASK_AGENTS = new Set([
 // ============================================================
 
 export type PolicyType = "allow" | "block" | "check";
+
+/** Prefix for codebase-memory MCP tools — all are treated as read-only. */
+export const CODEBASE_MEMORY_PREFIX = "mcp__codebase_memory_mcp__";
 
 export type BlockHint = "switch_to_build" | "use_alternative" | "silent";
 

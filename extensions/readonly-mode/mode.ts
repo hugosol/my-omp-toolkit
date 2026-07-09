@@ -16,6 +16,7 @@ import {
   TOOL_POLICIES,
   MERGED_DEBUG_POLICIES,
   DEFAULT_POLICY,
+  CODEBASE_MEMORY_PREFIX,
 } from "./policies";
 import type { ToolPolicy, BlockResult } from "./policies";
 import { formatBlock } from "./policies";
@@ -143,6 +144,7 @@ export function resolveToolPolicy(
   toolKey: "build" | "readonly" | "debug",
 ): ToolPolicy {
   if (toolKey === "build") return { type: "allow" };
+  if (toolName.startsWith(CODEBASE_MEMORY_PREFIX)) return { type: "allow" };
   const table = toolKey === "debug" ? MERGED_DEBUG_POLICIES : TOOL_POLICIES;
   return table[toolName] ?? DEFAULT_POLICY;
 }

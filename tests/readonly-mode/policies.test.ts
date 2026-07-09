@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { formatBlock, TOOL_POLICIES, DEFAULT_POLICY } from "../../extensions/readonly-mode/policies.ts";
+import { formatBlock, TOOL_POLICIES, DEFAULT_POLICY, CODEBASE_MEMORY_PREFIX } from "../../extensions/readonly-mode/policies.ts";
 import type { BlockResult } from "../../extensions/readonly-mode/policies.ts";
 
 // ============================================================
@@ -101,5 +101,15 @@ describe("DEFAULT_POLICY", () => {
   test("blocks unknown tools", () => {
     expect(DEFAULT_POLICY.type).toBe("block");
     expect(DEFAULT_POLICY.hint).toBe("switch_to_build");
+  });
+});
+
+// ============================================================
+// CODEBASE_MEMORY_PREFIX
+// ============================================================
+
+describe("CODEBASE_MEMORY_PREFIX", () => {
+  test("is correctly formatted", () => {
+    expect(CODEBASE_MEMORY_PREFIX).toBe("mcp__codebase_memory_mcp__");
   });
 });

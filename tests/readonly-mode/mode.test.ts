@@ -149,6 +149,40 @@ describe("resolveToolPolicy", () => {
     expect(resolveToolPolicy("resolve", "debug").type).toBe("allow");
     expect(resolveToolPolicy("lsp", "debug").type).toBe("check");
   });
+
+  // Codebase Memory MCP tools
+  test("CODEBASE_MEMORY_PREFIX tools are allowed in readonly mode", () => {
+    const tools = [
+      "mcp__codebase_memory_mcp__search_graph",
+      "mcp__codebase_memory_mcp__query_graph",
+      "mcp__codebase_memory_mcp__trace_path",
+      "mcp__codebase_memory_mcp__trace_call_path",
+      "mcp__codebase_memory_mcp__get_code_snippet",
+      "mcp__codebase_memory_mcp__get_graph_schema",
+      "mcp__codebase_memory_mcp__get_architecture",
+      "mcp__codebase_memory_mcp__search_code",
+      "mcp__codebase_memory_mcp__list_projects",
+      "mcp__codebase_memory_mcp__index_status",
+      "mcp__codebase_memory_mcp__detect_changes",
+      "mcp__codebase_memory_mcp__index_repository",
+      "mcp__codebase_memory_mcp__delete_project",
+      "mcp__codebase_memory_mcp__manage_adr",
+      "mcp__codebase_memory_mcp__ingest_traces",
+    ];
+    for (const tool of tools) {
+      expect(resolveToolPolicy(tool, "readonly").type).toBe("allow");
+    }
+  });
+
+  test("other mcp__ tools fall through to DEFAULT_POLICY", () => {
+    const policy = resolveToolPolicy("mcp__other_server__search", "readonly");
+    expect(policy.type).toBe("block");
+  });
+
+  test("mcp__ without matching prefix falls through to DEFAULT_POLICY", () => {
+    const policy = resolveToolPolicy("mcp__almost_codebase", "readonly");
+    expect(policy.type).toBe("block");
+  });
 });
 
 // ============================================================
@@ -723,5 +757,15 @@ describe("dispatchToolCall", () => {
     const result = dispatchToolCall({ toolName: "bash", input: { command: "rm -rf /" } }, mode("explore"), cwd);
     expect(result.block!.reason).not.toContain("/readonly");
     expect(result.block!.reason).not.toContain("Instead try");
+  });
+
+  // Codebase Memory MCP tools
+  test("explore mode allows codebase-memory MCP tools", () => {
+    const result = dispatchToolCall(
+      { toolName: "mcp__codebase_memory_mcp__search_graph", input: {} },
+      mode("explore"),
+      cwd,
+    );
+    expect(result.block).toBeUndefined();
   });
 });

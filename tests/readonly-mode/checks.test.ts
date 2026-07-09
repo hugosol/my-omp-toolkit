@@ -37,6 +37,17 @@ describe("checkBash", () => {
     }
   });
 
+
+  test("allows codebase-memory-mcp cli commands", () => {
+    const allowed = [
+      "codebase-memory-mcp cli search_graph",
+      "codebase-memory-mcp cli query_graph",
+      "codebase-memory-mcp cli get_code_snippet",
+    ];
+    for (const cmd of allowed) {
+      expect(checkBash({ input: { command: cmd } })).toBeUndefined();
+    }
+  });
   test("blocks empty command", () => {
     const result = checkBash({ input: { command: "" } });
     expect(result).toBeDefined();
