@@ -1,12 +1,12 @@
 /**
  * PRD-to-Code Extension — Autonomous two-phase workflow.
  *
- * Phase 1: /to-issues  → generate issue files from PRD
- * Phase 2: /tdd         → develop based on issue files
+ * Phase 1: /to-tickets  → generate ticket files from PRD
+ * Phase 2: /tdd          → develop based on ticket files
  *
  * Usage: /prd-to-code <slug>
  *   PRD at:  .scratch/<slug>/PRD.md
- *   Issues:  .scratch/<slug>/issues/*.md
+ *   Tickets: .scratch/<slug>/issues/*.md
  */
 
 import * as fs from "node:fs/promises";
@@ -32,7 +32,7 @@ const PUBLISH_REPLY = "请发布issue文件";
 // Helpers
 // ============================================================================
 
-async function hasIssueFiles(slug: string): Promise<boolean> {
+async function hasTicketFiles(slug: string): Promise<boolean> {
 	try {
 		const entries = await fs.readdir(`.scratch/${slug}/issues`);
 		return entries.some(e => e.endsWith(".md"));
@@ -86,7 +86,7 @@ async function startPhase2(pi: ExtensionAPI, slug: string): Promise<void> {
 	await activateSkill(
 		pi,
 		"tdd",
-		`请根据以下目录中的 issue 文件进行开发：.scratch/${slug}/issues`,
+		`请根据以下目录中的 ticket 文件进行开发：.scratch/${slug}/issues`,
 	);
 }
 
@@ -100,7 +100,7 @@ export default function prdToCode(pi: ExtensionAPI): void {
 	pi.on("agent_end", async (_event, _ctx) => {
 		if (currentPhase !== "phase1" || !currentSlug) return;
 
-		if (await hasIssueFiles(currentSlug)) {
+		if (await hasTicketFiles(currentSlug)) {
 			currentPhase = "idle";
 			const slug = currentSlug;
 			currentSlug = undefined;
@@ -113,7 +113,7 @@ export default function prdToCode(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("prd-to-code", {
-		description: "Autonomous PRD → Issues → Code workflow",
+		description: "Autonomous Spec → Tickets → Code workflow",
 		handler: async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
 			const slug = args.trim();
 
@@ -131,11 +131,11 @@ export default function prdToCode(pi: ExtensionAPI): void {
 			}
 
 			const { skills } = await discoverSkills();
-			const hasToIssues = skills.some(s => s.name === "to-issues");
+			const hasToTickets = skills.some(s => s.name === "to-tickets");
 			const hasTdd = skills.some(s => s.name === "tdd");
 
-			if (!hasToIssues || !hasTdd) {
-				const missing = [!hasToIssues && "to-issues", !hasTdd && "tdd"]
+			if (!hasToTickets || !hasTdd) {
+				const missing = [!hasToTickets && "to-tickets", !hasTdd && "tdd"]
 					.filter(Boolean)
 					.join(", ");
 				ctx.ui.notify(`缺少技能: ${missing}。请检查技能安装。`, "error");
@@ -147,14 +147,14 @@ export default function prdToCode(pi: ExtensionAPI): void {
 			firstReplySent = false;
 			const success = await activateSkill(
 				pi,
-				"to-issues",
-				`请分析以下PRD，生成独立的 issue 文件。PRD 路径：${prd}`,
+				"to-tickets",
+				`请分析以下PRD，生成独立的 ticket 文件。PRD 路径：${prd}`,
 			);
 
 			if (!success) {
 				currentPhase = "idle";
 				currentSlug = undefined;
-				ctx.ui.notify("无法激活 to-issues 技能", "error");
+				ctx.ui.notify("无法激活 to-tickets 技能", "error");
 			}
 		},
 	});
