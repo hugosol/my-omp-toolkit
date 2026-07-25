@@ -10,6 +10,9 @@
  */
 
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { discoverSkills, type ExtensionAPI, type ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
 
 // ============================================================================
@@ -39,6 +42,26 @@ async function hasTicketFiles(slug: string): Promise<boolean> {
 	} catch {
 		return false;
 	}
+}
+
+async function hasTddAgent(): Promise<boolean> {
+	// OMP auto-discovers agents from extension roots, project .omp/agents/, and ~/.omp/agent/agents/.
+	// Check the extension's own agents/ directory (resolved relative to this module) plus standard locations.
+	const extDir = path.dirname(fileURLToPath(import.meta.url));
+	const locations = [
+		path.join(extDir, "agents", "tdd.md"),
+		".omp/agents/tdd.md",
+		path.join(os.homedir(), ".omp/agent/agents/tdd.md"),
+	];
+	for (const loc of locations) {
+		try {
+			await fs.access(loc);
+			return true;
+		} catch {
+			// keep looking
+		}
+	}
+	return false;
 }
 
 /**
@@ -79,14 +102,13 @@ async function activateSkill(
 }
 
 // ============================================================================
-// Phase 2: start TDD
+// Phase 2: orchestrate TDD subagents
 // ============================================================================
 
 async function startPhase2(pi: ExtensionAPI, slug: string): Promise<void> {
-	await activateSkill(
-		pi,
-		"tdd",
-		`请根据以下目录中的 ticket 文件进行开发：.scratch/${slug}/issues`,
+	pi.sendUserMessage(
+		`请读取 .scratch/${slug}/issues/ 目录下的所有 ticket 文件。\n分析每个 ticket 的内容和依赖关系，按依赖顺序排列。\n\n对每个 ticket，使用 task 工具执行：\n  agent: "tdd"\n  task: 包含 ticket 的完整内容和名称\n\n⚠️ 约束：\n- 每个 ticket 必须由一次独立的 task(agent="tdd") 调用执行\n- 绝不能将多个 ticket 合并到同一次 task 调用中\n- 必须等待每个 task 完成后，再开始下一个\n- 全部完成后，输出每个 ticket 的完成状态摘要`,
+		{ deliverAs: "followUp" },
 	);
 }
 
@@ -132,13 +154,18 @@ export default function prdToCode(pi: ExtensionAPI): void {
 
 			const { skills } = await discoverSkills();
 			const hasToTickets = skills.some(s => s.name === "to-tickets");
-			const hasTdd = skills.some(s => s.name === "tdd");
+			const hasTddSkill = skills.some(s => s.name === "tdd");
+			const tddAgentExists = hasTddSkill && (await hasTddAgent());
 
-			if (!hasToTickets || !hasTdd) {
-				const missing = [!hasToTickets && "to-tickets", !hasTdd && "tdd"]
+			if (!hasToTickets || !tddAgentExists) {
+				const missing = [
+					!hasToTickets && "to-tickets (skill)",
+					!hasTddSkill && "tdd (skill)",
+					hasTddSkill && !tddAgentExists && "tdd (agent)",
+				]
 					.filter(Boolean)
 					.join(", ");
-				ctx.ui.notify(`缺少技能: ${missing}。请检查技能安装。`, "error");
+				ctx.ui.notify(`缺少: ${missing}。请检查安装。`, "error");
 				return;
 			}
 
