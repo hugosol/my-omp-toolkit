@@ -6,8 +6,9 @@
  * (default 220K).  Also tracks daily accumulated spend per session,
  * persisted to ~/.omp/cost-archive/deepseek-cost.json.
  *
- * Pricing (RMB per million tokens, deepseek-v4-pro):
- *   input (cache miss): ¥3     cacheRead (cache hit): ¥0.025     output: ¥6
+ * Pricing (RMB per million tokens):
+ *   deepseek-v4-pro:   input (cache miss): ¥3     cacheRead: ¥0.025   output: ¥6
+ *   deepseek-v4-flash: input (cache miss): ¥1     cacheRead: ¥0.02    output: ¥2
  *
  * Commands:
  *   /budget <N>K   — Set progress bar max, session-scoped (e.g. /budget 300K).
@@ -20,7 +21,7 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
 import { createTrackerState, DEFAULT_BUDGET, type TrackerState } from "./tracker-state";
 import {
-  MODEL_ID,
+  priceForModel,
   rmbCost,
   fmtTokens,
   fmtCost,
@@ -99,7 +100,8 @@ function refresh(
 ): void {
   if (!ctx.hasUI) return;
 
-  if (ctx.model?.id !== MODEL_ID) {
+  const tier = priceForModel(ctx.model?.id);
+  if (!tier) {
     ctx.ui.setWidget(WIDGET_KEY, undefined);
     return;
   }
@@ -135,11 +137,11 @@ function refresh(
     input: stats.input,
     cacheRead: stats.cacheRead,
     output: stats.output,
-  }, true, state.detailMode)}`);
+  }, true, state.detailMode, tier)}`);
 
   // Line 3: turn stats (if available)
   if (state.turnDelta) {
-    lines.push(`\u{1F4CA} Turn:   ${buildStatusLine(state.turnDelta, true, state.detailMode)}`);
+    lines.push(`\u{1F4CA} Turn:   ${buildStatusLine(state.turnDelta, true, state.detailMode, tier)}`);
   }
 
   ctx.ui.setWidget(WIDGET_KEY, lines);
@@ -237,8 +239,9 @@ export default function deepseekCost(pi: ExtensionAPI): void {
     const stats = ctx.sessionManager.getUsageStatistics();
     const cur = { input: stats.input, output: stats.output, cacheRead: stats.cacheRead, cacheWrite: stats.cacheWrite };
 
-    // Guard: only track DeepSeek model
-    if (ctx.model?.id !== MODEL_ID) {
+    // Guard: only track supported DeepSeek models
+    const tier = priceForModel(ctx.model?.id);
+    if (!tier) {
       state.previousTotal = cur;
       return;
     }
@@ -268,7 +271,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
       const deltaOutput = Math.max(0, stats.output - sess.lastOutput);
 
       if (deltaInput > 0 || deltaCacheRead > 0 || deltaOutput > 0) {
-        const deltaCost = rmbCost(deltaInput, deltaCacheRead, deltaOutput);
+        const deltaCost = rmbCost(deltaInput, deltaCacheRead, deltaOutput, tier);
         dailyData.totalCost += deltaCost;
         dailyData.totalTokens.input += deltaInput;
         dailyData.totalTokens.cacheRead += deltaCacheRead;

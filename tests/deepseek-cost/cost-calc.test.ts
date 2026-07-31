@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import {
-  MODEL_ID,
   PRICE_RMB_PER_1M,
+  priceForModel,
   fmtTokens,
   rmbCost,
   fmtCost,
@@ -13,17 +13,48 @@ import {
 // Constants
 // ============================================================
 
-describe("MODEL_ID", () => {
-  test("is the expected model", () => {
-    expect(MODEL_ID).toBe("deepseek-v4-pro");
+describe("PRICE_RMB_PER_1M", () => {
+  test("has pro pricing tiers (RMB per 1M tokens)", () => {
+    expect(PRICE_RMB_PER_1M["deepseek-v4-pro"].input).toBe(3);
+    expect(PRICE_RMB_PER_1M["deepseek-v4-pro"].cacheRead).toBe(0.025);
+    expect(PRICE_RMB_PER_1M["deepseek-v4-pro"].output).toBe(6);
+  });
+
+  test("has flash pricing tiers (RMB per 1M tokens)", () => {
+    expect(PRICE_RMB_PER_1M["deepseek-v4-flash"].input).toBe(1);
+    expect(PRICE_RMB_PER_1M["deepseek-v4-flash"].cacheRead).toBe(0.02);
+    expect(PRICE_RMB_PER_1M["deepseek-v4-flash"].output).toBe(2);
   });
 });
 
-describe("PRICE_RMB_PER_1M", () => {
-  test("has correct pricing tiers", () => {
-    expect(PRICE_RMB_PER_1M.input).toBe(3);
-    expect(PRICE_RMB_PER_1M.cacheRead).toBe(0.025);
-    expect(PRICE_RMB_PER_1M.output).toBe(6);
+// ============================================================
+// priceForModel
+// ============================================================
+
+describe("priceForModel", () => {
+  test("returns pro tier for deepseek-v4-pro", () => {
+    expect(priceForModel("deepseek-v4-pro")).toEqual({
+      input: 3,
+      cacheRead: 0.025,
+      output: 6,
+    });
+  });
+
+  test("returns flash tier for deepseek-v4-flash", () => {
+    expect(priceForModel("deepseek-v4-flash")).toEqual({
+      input: 1,
+      cacheRead: 0.02,
+      output: 2,
+    });
+  });
+
+  test("returns undefined for unsupported model ids", () => {
+    expect(priceForModel("gpt-5")).toBeUndefined();
+    expect(priceForModel("deepseek-v3")).toBeUndefined();
+  });
+
+  test("returns undefined when no model is set", () => {
+    expect(priceForModel(undefined)).toBeUndefined();
   });
 });
 
@@ -62,33 +93,57 @@ describe("fmtTokens", () => {
 // ============================================================
 
 describe("rmbCost", () => {
+  const pro = PRICE_RMB_PER_1M["deepseek-v4-pro"];
+  const flash = PRICE_RMB_PER_1M["deepseek-v4-flash"];
+
   test("returns zero for zero tokens", () => {
-    expect(rmbCost(0, 0, 0)).toBe(0);
+    expect(rmbCost(0, 0, 0, pro)).toBe(0);
   });
 
-  test("calculates input-only cost", () => {
+  test("calculates input-only cost for pro", () => {
     // 1M input tokens x 3 RMB = 3 RMB
-    expect(rmbCost(1_000_000, 0, 0)).toBe(3);
+    expect(rmbCost(1_000_000, 0, 0, pro)).toBe(3);
   });
 
-  test("calculates output-only cost", () => {
+  test("calculates output-only cost for pro", () => {
     // 1M output tokens x 6 RMB = 6 RMB
-    expect(rmbCost(0, 0, 1_000_000)).toBe(6);
+    expect(rmbCost(0, 0, 1_000_000, pro)).toBe(6);
   });
 
-  test("calculates cache-read cost", () => {
+  test("calculates cache-read cost for pro", () => {
     // 1M cache read tokens x 0.025 RMB = 0.025 RMB
-    expect(rmbCost(0, 1_000_000, 0)).toBe(0.025);
+    expect(rmbCost(0, 1_000_000, 0, pro)).toBe(0.025);
   });
 
-  test("calculates mixed cost", () => {
+  test("calculates mixed cost for pro", () => {
     // 500K input (1.5 RMB) + 200K cache (0.005 RMB) + 100K output (0.6 RMB) = 2.105 RMB
-    const cost = rmbCost(500_000, 200_000, 100_000);
+    const cost = rmbCost(500_000, 200_000, 100_000, pro);
     expect(cost).toBeCloseTo(2.105, 6);
   });
 
+  test("calculates input-only cost for flash", () => {
+    // 1M input tokens x 1 RMB = 1 RMB
+    expect(rmbCost(1_000_000, 0, 0, flash)).toBe(1);
+  });
+
+  test("calculates output-only cost for flash", () => {
+    // 1M output tokens x 2 RMB = 2 RMB
+    expect(rmbCost(0, 0, 1_000_000, flash)).toBe(2);
+  });
+
+  test("calculates cache-read cost for flash", () => {
+    // 1M cache read tokens x 0.02 RMB = 0.02 RMB
+    expect(rmbCost(0, 1_000_000, 0, flash)).toBe(0.02);
+  });
+
+  test("calculates mixed cost for flash", () => {
+    // 500K input (0.5 RMB) + 200K cache (0.004 RMB) + 100K output (0.2 RMB) = 0.704 RMB
+    const cost = rmbCost(500_000, 200_000, 100_000, flash);
+    expect(cost).toBeCloseTo(0.704, 6);
+  });
+
   test("handles fractional tokens gracefully", () => {
-    const cost = rmbCost(1, 0, 0);
+    const cost = rmbCost(1, 0, 0, pro);
     expect(cost).toBe(3 / 1_000_000);
   });
 });
@@ -116,24 +171,36 @@ describe("fmtCost", () => {
 // ============================================================
 
 describe("ioRatio", () => {
+  const pro = PRICE_RMB_PER_1M["deepseek-v4-pro"];
+  const flash = PRICE_RMB_PER_1M["deepseek-v4-flash"];
+
   test("returns placeholder when total cost is zero", () => {
-    expect(ioRatio({ input: 0, cacheRead: 0, output: 0 })).toBe("\u00A5I/O: --:--");
+    expect(ioRatio({ input: 0, cacheRead: 0, output: 0 }, pro)).toBe("\u00A5I/O: --:--");
   });
 
   test("returns 100:0 when only input cost exists", () => {
-    const result = ioRatio({ input: 1_000_000, cacheRead: 0, output: 0 });
+    const result = ioRatio({ input: 1_000_000, cacheRead: 0, output: 0 }, pro);
     expect(result).toBe("\u00A5I/O: 100:0");
   });
 
   test("returns 0:100 when only output cost exists", () => {
-    const result = ioRatio({ input: 0, cacheRead: 0, output: 1_000_000 });
+    const result = ioRatio({ input: 0, cacheRead: 0, output: 1_000_000 }, pro);
     expect(result).toBe("\u00A5I/O: 0:100");
   });
 
   test("returns proportional ratio for mixed usage", () => {
     // input 1M (3 RMB) + cache 0 + output 500K (3 RMB) -> 50:50
-    const result = ioRatio({ input: 1_000_000, cacheRead: 0, output: 500_000 });
+    const result = ioRatio({ input: 1_000_000, cacheRead: 0, output: 500_000 }, pro);
     expect(result).toContain("50:50");
+  });
+
+  test("cache-heavy ratio differs between pro and flash", () => {
+    // input 1M + cache 1M + output 100K:
+    // pro   iCost = 3 + 0.025 = 3.025, oCost = 0.6   -> 3.025/3.625 = 83.4% -> 83:17
+    // flash iCost = 1 + 0.02 = 1.02,  oCost = 0.2    -> 1.02/1.22  = 83.6% -> 84:16
+    const usage = { input: 1_000_000, cacheRead: 1_000_000, output: 100_000 };
+    expect(ioRatio(usage, pro)).toContain("83:17");
+    expect(ioRatio(usage, flash)).toContain("84:16");
   });
 });
 
@@ -142,10 +209,12 @@ describe("ioRatio", () => {
 // ============================================================
 
 describe("buildStatusLine", () => {
+  const pro = PRICE_RMB_PER_1M["deepseek-v4-pro"];
+  const flash = PRICE_RMB_PER_1M["deepseek-v4-flash"];
   const usage = { input: 100_000, cacheRead: 50_000, output: 20_000 };
 
   test("brief + pad mode shows cache hit rate and cost", () => {
-    const line = buildStatusLine(usage, true, false);
+    const line = buildStatusLine(usage, true, false, pro);
     expect(line).toContain("Cache:");
     expect(line).toContain("33%");  // 50K / 150K
     expect(line).toContain("Sum:");
@@ -155,7 +224,7 @@ describe("buildStatusLine", () => {
   });
 
   test("detail + pad mode shows input breakdown", () => {
-    const line = buildStatusLine(usage, true, true);
+    const line = buildStatusLine(usage, true, true, pro);
     expect(line).toContain("Input:");
     expect(line).toContain("Output:");
     expect(line).toContain("Sum:");
@@ -163,24 +232,33 @@ describe("buildStatusLine", () => {
   });
 
   test("brief + no-pad mode", () => {
-    const line = buildStatusLine(usage, false, false);
+    const line = buildStatusLine(usage, false, false, pro);
     expect(line).toContain("Cache:");
     expect(line).toContain("33%");
   });
 
   test("detail + no-pad mode", () => {
-    const line = buildStatusLine(usage, false, true);
+    const line = buildStatusLine(usage, false, true, pro);
     expect(line).toContain("Input:");
     expect(line).toContain("Output:");
   });
 
   test("zero usage displays 0% hit rate", () => {
-    const line = buildStatusLine({ input: 0, cacheRead: 0, output: 0 }, false, false);
+    const line = buildStatusLine({ input: 0, cacheRead: 0, output: 0 }, false, false, pro);
     expect(line).toContain("0%");
   });
 
   test("handles all-cache-hit scenario", () => {
-    const line = buildStatusLine({ input: 0, cacheRead: 100_000, output: 0 }, false, false);
+    const line = buildStatusLine({ input: 0, cacheRead: 100_000, output: 0 }, false, false, pro);
     expect(line).toContain("100%");
+  });
+
+  test("cost reflects the model tier", () => {
+    // usage: 100K input + 50K cache + 20K output
+    // flash: 0.1 + 0.001 + 0.04 = 0.141 -> "¥0.14"; pro: 0.3 + 0.00125 + 0.12 = 0.42125 -> "¥0.42"
+    const flashLine = buildStatusLine(usage, false, true, flash);
+    const proLine = buildStatusLine(usage, false, true, pro);
+    expect(flashLine).toContain("\u00A50.14");
+    expect(proLine).toContain("\u00A50.42");
   });
 });

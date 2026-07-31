@@ -12,13 +12,14 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 
 ## 定价
 
-基于 `deepseek-v4-pro`（RMB / 百万 tokens）：
+基于 DeepSeek 官方价格表（RMB / 百万 tokens）：
 
-| 类型 | 单价 |
-|------|------|
-| input（cache miss） | ¥3 |
-| cacheRead（cache hit） | ¥0.025 |
-| output | ¥6 |
+| 模型 | input（cache miss） | cacheRead（cache hit） | output |
+|------|------|------|------|
+| deepseek-v4-pro | ¥3 | ¥0.025 | ¥6 |
+| deepseek-v4-flash | ¥1 | ¥0.02 | ¥2 |
+
+仅追踪以上两个模型；其他模型/渠道不显示 widget、不累计费用。
 
 ## 命令
 
