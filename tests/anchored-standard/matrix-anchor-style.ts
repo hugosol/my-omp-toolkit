@@ -4,7 +4,7 @@
  * 4 arms x N reps single-request probes, DeepSeek V4 Pro, thinking=max
  * (--reps N, default 4):
  *
- *   A anchored    persona + cap 1024 + wire tool narrowing
+ *   A anchored    anchored-standard（persona 全程 + promotion 后 stripped append，无 cap/narrow）
  *   B persona-only  persona replacement only (no cap, no narrowing)
  *   C cap-only      max_tokens 1024 only (full prompt, full catalog)
  *   D control       untouched omp request
@@ -113,8 +113,9 @@ interface RunRecord {
 }
 
 function personaText(): string {
-	const parsed = JSON.parse(readFileSync(ANCHORED_CONFIG, "utf8")) as { personaText: string };
-	return parsed.personaText;
+	const DEFAULT_PERSONA = "You are a helpful software engineer assistant.";
+	const parsed = JSON.parse(readFileSync(ANCHORED_CONFIG, "utf8")) as { personaText?: string };
+	return parsed.personaText ?? DEFAULT_PERSONA;
 }
 
 function writeVariant(dir: string, name: string, source: string): string {

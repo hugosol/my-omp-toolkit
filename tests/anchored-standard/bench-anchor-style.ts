@@ -255,80 +255,6 @@ export function parseWireRequests(stderr: string): WireRequest[] {
 }
 
 // ---------------------------------------------------------------------------
-// Bootstrap signature (wire layer is authoritative; transcript is behavioral)
-// ---------------------------------------------------------------------------
-
-interface BootstrapExpectation {
-	shellTools: string[];
-	commonTools: string[];
-	bootstrapMaxTokens: number;
-}
-
-export function readBootstrapExpectation(): BootstrapExpectation {
-	const parsed = JSON.parse(readFileSync(join(EXT_DIR, "config.json"), "utf8")) as Record<string, unknown>;
-	return {
-		shellTools: parsed.shellTools as string[],
-		commonTools: parsed.commonTools as string[],
-		bootstrapMaxTokens: parsed.bootstrapMaxTokens as number,
-	};
-}
-
-export interface WireBootstrapCheck {
-	/** request #1 carried only bootstrap tools. */
-	firstRequestInsideBootstrap: boolean;
-	/** request #1 carried a max-token field capped at or below the bootstrap cap. */
-	firstRequestCapped: boolean;
-	/** a later request carried at least one non-bootstrap tool. */
-	opened: boolean;
-}
-
-export function checkWireBootstrap(wireRequests: WireRequest[], expectation: BootstrapExpectation): WireBootstrapCheck {
-	const bootstrap: Record<string, true> = {};
-	for (const tool of [...expectation.shellTools, ...expectation.commonTools]) {
-		bootstrap[tool] = true;
-	}
-	const first = wireRequests[0];
-	const firstTools = first?.tools ?? [];
-	const firstInside = firstTools.length > 0 && firstTools.every(tool => bootstrap[tool] === true);
-	const firstCapped =
-		first?.maxTokens !== null &&
-		first?.maxTokens !== undefined &&
-		(first?.maxTokens ?? Number.POSITIVE_INFINITY) <= expectation.bootstrapMaxTokens;
-	const later = wireRequests.slice(1).flatMap(request => request.tools);
-	const opened = later.some(tool => bootstrap[tool] !== true);
-	return { firstRequestInsideBootstrap: firstInside, firstRequestCapped: firstCapped, opened };
-}
-
-export interface TranscriptBootstrapCheck {
-	/** request #1 called no tool outside the bootstrap catalog. */
-	firstRequestInsideBootstrap: boolean;
-	/** request #1 called at least one tool (otherwise nothing to check). */
-	firstRequestCalledTools: boolean;
-	/** a later request called at least one non-bootstrap tool. */
-	opened: boolean;
-}
-
-export function checkTranscriptBootstrap(
-	requests: RequestStats[],
-	expectation: BootstrapExpectation,
-): TranscriptBootstrapCheck {
-	const bootstrap: Record<string, true> = {};
-	for (const tool of [...expectation.shellTools, ...expectation.commonTools]) {
-		bootstrap[tool] = true;
-	}
-	const first = requests[0];
-	const firstTools = first?.toolNames ?? [];
-	const firstInside = firstTools.length > 0 && firstTools.every(tool => bootstrap[tool] === true);
-	const later = requests.slice(1).flatMap(request => request.toolNames);
-	const opened = later.some(tool => bootstrap[tool] !== true);
-	return {
-		firstRequestInsideBootstrap: firstInside,
-		firstRequestCalledTools: firstTools.length > 0,
-		opened,
-	};
-}
-
-// ---------------------------------------------------------------------------
 // Live runs
 // ---------------------------------------------------------------------------
 
@@ -521,14 +447,13 @@ async function main(): Promise<void> {
 		process.exit(2);
 	}
 
-	const expectation = readBootstrapExpectation();
 	const probeDir = mkdtempSync(join(tmpdir(), "anchor-style-probe-"));
 	const probeEntry = join(probeDir, "probe.ts");
 	writeFileSync(probeEntry, PROBE_SOURCE);
 	console.log(`model=${args.model} thinking=${args.thinking} runs=${args.runs}`);
 	console.log(
-		`bootstrap catalog=${[...expectation.shellTools, ...expectation.commonTools].join(", ")} cap=${expectation.bootstrapMaxTokens} ` +
-			`(anchored arm = anchored-standard + wire probe; control arm = wire probe only; both use --trusted-extension allowlist)`,
+		"(anchored arm = anchored-standard + wire probe: persona full-session, stripped append, wire untouched; " +
+			"control arm = wire probe only; both use --trusted-extension allowlist)",
 	);
 	console.log(`task: ${args.task}\n`);
 
@@ -570,37 +495,6 @@ async function main(): Promise<void> {
 	}
 
 	rmSync(probeDir, { recursive: true, force: true });
-
-	console.log("\nWire-layer bootstrap signature (probe, authoritative)");
-	for (const arm of ["anchored", "control"] as const) {
-		const armResults = results.filter(result => result.arm === arm);
-		const withProbe = armResults
-			.map(result => checkWireBootstrap(result.wireRequests, expectation))
-			.filter(check => check.firstRequestInsideBootstrap || check.firstRequestCapped);
-		const inside = withProbe.filter(check => check.firstRequestInsideBootstrap).length;
-		const capped = withProbe.filter(check => check.firstRequestCapped).length;
-		const opened = withProbe.filter(check => check.opened).length;
-		console.log(
-			`${arm.padEnd(8)} request#1 inside bootstrap: ${inside}/${armResults.length} runs; ` +
-				`request#1 capped: ${capped}/${armResults.length} runs; ` +
-				`full catalog on a later request: ${opened}/${armResults.length} runs`,
-		);
-	}
-
-	console.log("\nTranscript tool calls (behavioral; owned-dialect providers may bypass wire filter)");
-	for (const arm of ["anchored", "control"] as const) {
-		const armResults = results.filter(result => result.arm === arm);
-		const passes = armResults
-			.map(result => checkTranscriptBootstrap(result.requests, expectation))
-			.filter(check => check.firstRequestCalledTools);
-		const ok = passes.filter(check => check.firstRequestInsideBootstrap).length;
-		const opened = passes.filter(check => check.opened).length;
-		console.log(
-			`${arm.padEnd(8)} request#1 called only bootstrap tools: ${ok}/${passes.length} runs` +
-				(passes.length < armResults.length ? ` (${armResults.length - passes.length} text-only first replies)` : "") +
-				`; called a non-bootstrap tool later: ${opened}/${passes.length}`,
-		);
-	}
 
 	const anchoredRequests = results.filter(result => result.arm === "anchored").flatMap(result => result.requests);
 	const controlRequests = results.filter(result => result.arm === "control").flatMap(result => result.requests);

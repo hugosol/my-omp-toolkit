@@ -4,19 +4,10 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import {
-	checkTranscriptBootstrap,
-	checkWireBootstrap,
 	countMarkers,
 	parseSession,
 	parseWireRequests,
-	readBootstrapExpectation,
 } from "./bench-anchor-style";
-
-const EXPECTATION = {
-	shellTools: ["bash", "pwsh"],
-	commonTools: ["read"],
-	bootstrapMaxTokens: 1024,
-};
 
 function messageEntry(message: Record<string, unknown>): string {
 	return JSON.stringify({ type: "message", id: "m", message }) + "\n";
@@ -105,45 +96,5 @@ describe("parseWireRequests", () => {
 			{ request: 1, tools: ["read", "bash"], maxTokens: 1024 },
 			{ request: 2, tools: ["write"], maxTokens: 64000 },
 		]);
-	});
-});
-
-describe("checkWireBootstrap", () => {
-	test("anchored signature: first request inside + capped, later request opened", () => {
-		const check = checkWireBootstrap(
-			[
-				{ request: 1, tools: ["read", "bash"], maxTokens: 1024 },
-				{ request: 2, tools: ["read", "bash", "write"], maxTokens: 64000 },
-			],
-			EXPECTATION,
-		);
-		expect(check).toEqual({ firstRequestInsideBootstrap: true, firstRequestCapped: true, opened: true });
-	});
-
-	test("control signature: full catalog and uncapped from request #1", () => {
-		const check = checkWireBootstrap(
-			[{ request: 1, tools: ["read", "bash", "write"], maxTokens: 64000 }],
-			EXPECTATION,
-		);
-		expect(check).toEqual({ firstRequestInsideBootstrap: false, firstRequestCapped: false, opened: false });
-	});
-});
-
-describe("checkTranscriptBootstrap", () => {
-	test("text-only first reply has nothing to check", () => {
-		const check = checkTranscriptBootstrap(
-			[{ request: 1, reasoningBlocks: 0, thinkingChars: 0, visibleReplies: 1, visibleChars: 2, toolNames: [], markers: { we: 0, weNeed: 0, lets: 0, letMe: 0 } }],
-			EXPECTATION,
-		);
-		expect(check.firstRequestCalledTools).toBe(false);
-	});
-});
-
-describe("readBootstrapExpectation", () => {
-	test("shipped config exposes non-empty bootstrap catalog and positive cap", () => {
-		const expectation = readBootstrapExpectation();
-		expect(expectation.shellTools.length).toBeGreaterThan(0);
-		expect(expectation.commonTools.length).toBeGreaterThan(0);
-		expect(expectation.bootstrapMaxTokens).toBeGreaterThan(0);
 	});
 });

@@ -1,17 +1,19 @@
 # Anchored Standard
 
-两阶段 bootstrap 扩展：会话首个模型请求以 Minimal 对齐条件发出（最小工具面 + 输出封顶 + 剥离自动注入上下文），产生首个持久 promotion 信号后恢复完整 omp 工具目录与提示。移植自 [dsh-anchored-standard](https://github.com/…/dsh-anchored-standard) preset 的机制。
+Persona 锚定扩展：主会话全程以最小 persona 作为 system prompt；会话记录首个 assistant 消息后，每次上下文组装把捕获的 omp 原提示词（剥离 persona 段）作为一条 developer 消息插到消息列表第 1 位，使模型恢复 omp 的工具说明、skills、规则与项目上下文，同时避免第二份 persona 与 system prompt 竞争。
 
 ## 机制
 
-| 阶段 | 工具面 | 输出预算 | system prompt |
-|---|---|---|---|
-| **bootstrap**（未 promote） | wire 层收窄为一个平台 shell + `read` | `max_tokens` 类字段封顶 `bootstrapMaxTokens`（默认 1024） | 仅 Minimal persona |
-| **promoted** | 全量目录 | 恢复缺省（不再写入封顶，无状态泄漏） | persona 保持；omp 原提示以 developer 消息 append 进对话（`restoreMode: "append"`） |
+| 阶段 | system prompt | 对话消息 |
+|---|---|---|
+| **未 promote** | `personaText` | 不注入 |
+| **首个 assistant 消息后** | `personaText`（不变） | 每次请求在 index 1 插入 developer 消息：剥离 `§ Role`…`§ Runtime` 区间后的 omp 原提示 |
 
-- **promotion 信号**（`promoteOn`）：`either`（默认，首个 tool call 或首个 assistant 回复先到先得）/ `tool-call` / `assistant-message`。信号从**持久化会话条目**派生——resume/reload 保相位；每进程按 session id memoize。
-- **子代理豁免**：registry `kind !== "main"` 的会话（task 子代理、advisor）首请求即全量。
-- **缓存语义**：append 模式下 system+消息前缀全程恒定；wire 工具目录只在 promotion 时变化一次，前缀缓存只断那一次（dsh 原版同样接受该成本）。
+- **promotion 信号**（硬编码）：会话持久条目中出现首个 assistant 消息即 promote；resume/reload 保相位，每进程按 session id memoize。
+- **子代理豁免**：registry `kind !== "main"` 的会话（task 子代理、advisor）保持原 omp prompt，不注入 developer 消息。
+- **缓存语义**：system prompt 全程恒定（persona）；promotion 时消息前缀只变化一次。
+- **锚点契约**：剥离依赖 omp 提示词中的 `§ Role`/`§ Runtime` 段落标记。`session_start` 检查 base prompt，`before_agent_start` 用当轮 prompt 复检。标记缺失时本会话**停用扩展全部逻辑**并通知用户一次（文件日志 + 会话可见消息；TUI `notify`/`setStatus`；print 模式 stderr）；标记恢复后下一轮 agent start 自动恢复。
+- 停用通知的会话消息会进入 LLM 上下文（有意为之，让模型同样知晓扩展已停用）。
 
 ## 安装
 
@@ -30,32 +32,29 @@
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `enabled` | `true` | 总开关 |
-| `promoteOn` | `"either"` | `either` / `tool-call` / `assistant-message` |
-| `bootstrapMaxTokens` | `1024` | 首请求输出封顶（DeepSeek V4 特调值；其他模型可调） |
-| `personaText` | `"You are a helpful software engineer assistant."` | bootstrap 阶段 persona |
-| `restoreMode` | `"append"` | `append`：omp 原提示 promote 后作为消息 append（system 前缀恒定）；`system-block`：promote 后恢复为 system 块；`none`：整会话 persona（dsh 字面语义） |
-| `shellTools` | `["bash", "pwsh"]` | 平台 shell 候选，bootstrap 时要求恰好命中一个 |
-| `commonTools` | `["read"]` | bootstrap 时与 shell 并存的工具 |
+| `personaText` | `"You are a helpful software engineer assistant."` | 主会话全程 system prompt |
+
+旧版本的 `promoteOn` / `bootstrapMaxTokens` / `shellTools` / `commonTools` / `restoreMode` 键已被废弃，保留在配置文件中会被静默忽略。
 
 ## 健壮性约定
 
-- 每个过滤器失败都**降级为原始请求**并一次性告警：缺 bootstrap 工具 → 全量目录；无法识别的 provider payload → 不封顶；会话扫描异常 → 视为已 promote。任何 bug 都不会卡死会话或吞掉用户上下文。
-- 非法配置（错误的 `promoteOn`/`restoreMode`、非正整数 cap、空工具列表）在扩展加载时直接失败，omp loader 会显示错误。
-- 用户主动的 skill 手势等非自动注入内容不受影响（本扩展只替换 system prompt 与 wire 参数，不触碰对话消息本身）。
+- 每个钩子失败都降级为原始输入并一次性告警；锚点缺失按上述协议停用并通知。任何 bug 都不会卡死会话或吞掉用户上下文。
+- 非法配置（`enabled` 非布尔、`personaText` 空）在扩展加载时直接失败，omp loader 会显示错误。
+- 本扩展不注册 `before_provider_request`：wire payload（工具目录、max_tokens）零干预。
 
 ## 测试
 
 ```
-bun test tests/anchored-standard/        # 单元 + fake-harness 集成（88 用例）
+bun test tests/anchored-standard/        # 单元 + fake-harness 集成
 bun tests/anchored-standard/smoke-omp.ts # L2：真实 omp loader/runner/registry 全链路烟测
 ```
 
 ## 已知限制
 
-- 封顶/收窄作用于 wire 层；provider 自有的 in-band 工具转写（owned-dialect，env 选择）不受 wire 工具过滤影响。
-- `restoreMode: "append"` 的 developer 消息在 promotion 后按最近一次 agent start 捕获的提示注入；promotion 后新增的 skills 不会更新它（下个会话生效）。
-- 副作用请求（advisor、标题生成）不走 `before_provider_request` 主链路钩子，不受封顶/收窄影响。
+- developer 消息按最近一次 agent start 捕获的提示注入；promotion 后新增的 skills 不会更新它（下个会话生效）。
+- 剥离锚点依赖 omp 提示词结构：omp 重排或改名 `§ Role`/`§ Runtime` 时扩展自动停用并通知用户，需要同步更新 `strip.ts` 中的常量。
+- 副作用请求（advisor、标题生成）不走 `before_provider_request`/`before_agent_start` 主链路钩子，不受影响。
 
 ## 兼容性
 
-开发与测试环境：omp 17.3.4（bun 1.3.14）。omp 是快速迭代的开发者预览，升级前检查本扩展使用的三个事件（`before_agent_start`、`before_provider_request`、`context`）语义是否变化。
+开发与测试环境：omp 17.3.4（bun 1.3.14）。omp 是快速迭代的开发者预览，升级前检查本扩展使用的三个事件（`session_start`、`before_agent_start`、`context`）与 `ctx.getSystemPrompt()` 语义是否变化。

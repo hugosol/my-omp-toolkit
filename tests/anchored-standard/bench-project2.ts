@@ -6,8 +6,10 @@
  *   for arm in anchored|control, run 1..N:
  *     1. `python evaluator/make_broken_project.py`  — reset the broken seed
  *     2. spawn `omp --print` in `modeltest/workspace` with CANDIDATE_PROMPT.md
- *        as the initial message (anchored arm = anchored-standard + wire probe,
- *        control arm = wire probe only; both via --trusted-extension allowlist)
+ *        as the initial message (anchored arm = anchored-standard + wire probe;
+ *        anchored-standard now runs persona full-session with stripped append
+ *        and leaves the wire payload untouched; control arm = wire probe only;
+ *        both via --trusted-extension allowlist)
  *     3. `python evaluator/run_full_eval.py workspace/project2_task …` — hidden
  *        tests + frozen scoring produce ability_draft / ship_draft / blockers
  *     4. record transcript markers, wire payloads, and scores per run
@@ -37,6 +39,7 @@ const MODELTEST_ROOT = process.env.MODELTEST_ROOT ?? "E:/Developer/myhub/dsh/mod
 const WORKSPACE = join(MODELTEST_ROOT, "workspace");
 const CANDIDATE_PROMPT = join(MODELTEST_ROOT, "CANDIDATE_PROMPT.md");
 const EXT_ENTRY = join(import.meta.dir, "..", "..", "extensions", "anchored-standard", "index.ts");
+const DEFAULT_PERSONA = "You are a helpful software engineer assistant.";
 
 /** The candidate prompt is the fenced body under "提示词正文"; the file's
  * header/metadata must not reach the model (dsh protocol pastes the body only). */
@@ -317,10 +320,10 @@ async function main(): Promise<void> {
 	};
 	if (arms.includes("e")) {
 		const config = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "extensions", "anchored-standard", "config.json"), "utf8")) as {
-			personaText: string;
+			personaText?: string;
 		};
 		const eEntry = join(probeDir, "e-arm.ts");
-		writeFileSync(eEntry, eArmSource(config.personaText));
+		writeFileSync(eEntry, eArmSource(config.personaText ?? DEFAULT_PERSONA));
 		armEntries.e = [eEntry];
 	}
 

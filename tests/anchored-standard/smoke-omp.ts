@@ -4,14 +4,17 @@
  *
  *   bun tests/anchored-standard/smoke-omp.ts
  *
- * Asserts the three transforms through the real chaining pipeline:
- *   1. before_agent_start replaces the system prompt with the persona
- *      (unpromoted).
- *   2. before_provider_request caps max_tokens and narrows the wire tools.
- *   3. After a durable assistant tool call is recorded, promotion opens the
- *      full catalog and the context handler appends the captured prompt as a
- *      developer message.
+ * Asserts the persona + stripped-append pipeline through the real chaining
+ * runner:
+ *   1. session_start checks the base prompt against the § Role/§ Runtime
+ *      strip markers; before_agent_start re-checks the per-turn prompt.
+ *   2. Main sessions run on the persona for the whole session; provider
+ *      payloads are never touched (no before_provider_request handler).
+ *   3. After the first durable assistant message, context appends the
+ *      stripped omp prompt as a developer message at index 1.
  *   4. Subagents (registry kind "sub") are exempt everywhere.
+ *   5. Missing markers disable the session with one visible notification and
+ *      self-heal when the markers return.
  */
 import { expect } from "bun:test";
 
@@ -32,7 +35,16 @@ const { AuthStorage } = await import(`${OMP}/src/session/auth-storage.ts`);
 const { AgentRegistry } = await import(`${OMP}/src/registry/agent-registry.ts`);
 
 const PERSONA = "You are a helpful software engineer assistant.";
-const FULL_PROMPT = ["<skills>read, bash, edit</skills>", "<repo-rules>AGENTS.md digest</repo-rules>"];
+
+const ROLE_MARKER = "§ Role";
+const RUNTIME_MARKER = "§ Runtime";
+const CONVENTIONS = "<system-conventions>smoke conventions</system-conventions>";
+const PERSONA_SECTION = `${ROLE_MARKER}\npersona text\n# Escalation`;
+const RUNTIME_SECTION = `${RUNTIME_MARKER}\n<skills>read, bash, edit</skills>\n<Tool Inventory>read, bash, edit</Tool Inventory>`;
+const MARKED_BLOCK = `${CONVENTIONS}\n\n${PERSONA_SECTION}\n\n${RUNTIME_SECTION}`;
+const FULL_PROMPT = [MARKED_BLOCK, "<repo-rules>AGENTS.md digest</repo-rules>"];
+const STRIPPED_FULL = `${CONVENTIONS}\n\n${RUNTIME_SECTION}\n\n<repo-rules>AGENTS.md digest</repo-rules>`;
+const BROKEN_PROMPT = ["<skills>read, bash</skills>", "<repo-rules>AGENTS.md digest</repo-rules>"];
 
 const anthropicPayload = () => ({
 	model: "claude-x",
@@ -59,6 +71,39 @@ const userMessage = () => ({
 	timestamp: Date.now(),
 });
 
+const sentMessages: Array<{ message: Record<string, unknown>; options?: Record<string, unknown> }> = [];
+const actions = {
+	sendMessage: (message: unknown, options?: unknown): void => {
+		sentMessages.push({ message: message as Record<string, unknown>, options: options as Record<string, unknown> | undefined });
+	},
+	sendUserMessage: (): void => {},
+	appendEntry: (): void => {},
+	setLabel: (): void => {},
+	getActiveTools: (): string[] => [],
+	getAllTools: (): unknown[] => [],
+	setActiveTools: async (): Promise<void> => {},
+	getCommands: (): unknown[] => [],
+	setModel: async (): Promise<boolean> => false,
+	getThinkingLevel: (): string => "max",
+	setThinkingLevel: async (): Promise<void> => {},
+	getSessionName: (): string => "smoke",
+	setSessionName: (): void => {},
+	registerProvider: (): void => {},
+	unregisterProvider: (): void => {},
+	getServiceTiers: async (): Promise<unknown[]> => [],
+	setServiceTier: async (): Promise<void> => {},
+};
+const contextActions = (systemPrompt: string[]) => ({
+	getModel: (): undefined => undefined,
+	isIdle: (): boolean => true,
+	abort: (): void => {},
+	hasPendingMessages: (): boolean => false,
+	shutdown: (): void => {},
+	getContextUsage: (): undefined => undefined,
+	compact: async (): Promise<void> => {},
+	getSystemPrompt: (): string[] => systemPrompt,
+});
+
 let step = 0;
 const pass = (label: string) => console.log(`✔ ${++step}. ${label}`);
 
@@ -73,10 +118,7 @@ try {
 	const authStorage = await AuthStorage.create(":memory:");
 	const modelRegistry = new ModelRegistry(authStorage);
 
-	// --- Main session: bootstrap applies ---
-	// File-backed managers: in-memory sessions all report an empty session
-	// file, which would collide in the registry file-match used for subagent
-	// detection. Real sessions are always file-backed.
+	// --- Main session ---
 	const mainManager = SessionManager.create(tmp);
 	const mainFile = mainManager.getSessionFile() ?? null;
 	AgentRegistry.global().register({
@@ -89,19 +131,20 @@ try {
 		status: "running",
 	});
 	const runner = new ExtensionRunner(loadResult.extensions, loadResult.runtime, tmp, mainManager, modelRegistry);
+	runner.initialize(actions as never, contextActions(FULL_PROMPT) as never);
+
+	await runner.emit({ type: "session_start" });
+	expect(sentMessages).toEqual([]);
+	pass("session_start: marked base prompt keeps the extension active");
 
 	const agentStart = await runner.emitBeforeAgentStart("hello", undefined, FULL_PROMPT);
 	expect(agentStart?.systemPrompt).toEqual([PERSONA]);
-	pass("before_agent_start: unpromoted prompt replaced with persona");
+	pass("before_agent_start: prompt replaced with persona");
 
-	const first = await runner.emitBeforeProviderRequest(anthropicPayload(), undefined);
-	expect(first.tools.map(t => t.name)).toEqual(["read", "bash"]);
-	expect(first.max_tokens).toBe(1024);
-	pass("before_provider_request: tools narrowed and max_tokens capped on request #1");
-
-	const second = await runner.emitBeforeProviderRequest(anthropicPayload(), undefined);
-	expect(second.max_tokens).toBe(1024);
-	pass("request #2 before promotion stays bootstrapped");
+	const payload = anthropicPayload();
+	const first = await runner.emitBeforeProviderRequest(payload, undefined);
+	expect(first).toEqual(payload);
+	pass("provider payload untouched: no cap, no tool narrowing, ever");
 
 	// Frozen fixture: userMessage() regenerates Date.now() per call, so the
 	// assertion side must reuse the same object, not a fresh timestamp twin.
@@ -112,22 +155,16 @@ try {
 
 	mainManager.appendMessage(toolCallMessage());
 
-	// The handler returns undefined (untouched); the runner therefore passes
-	// the original payload through — assert the wire body stays full.
-	const promotedRequest = await runner.emitBeforeProviderRequest(anthropicPayload(), undefined);
-	expect(promotedRequest.max_tokens).toBe(64000);
-	expect(promotedRequest.tools).toHaveLength(4);
-	pass("durable tool call promotes: wire request untouched after promotion");
-
 	const postPromote = await runner.emitContext([userMessage()]);
 	expect(postPromote).toHaveLength(2);
 	expect(postPromote[1].role).toBe("developer");
-	expect(postPromote[1].content).toBe(FULL_PROMPT.join("\n\n"));
-	pass("context: captured omp prompt appended as developer message after promotion");
+	expect(postPromote[1].content).toBe(STRIPPED_FULL);
+	expect(String(postPromote[1].content)).not.toContain("persona text");
+	pass("durable assistant message promotes: stripped omp prompt appended at index 1");
 
 	const postPromoteStart = await runner.emitBeforeAgentStart("second prompt", undefined, FULL_PROMPT);
 	expect(postPromoteStart?.systemPrompt).toEqual([PERSONA]);
-	pass("before_agent_start: persona persists after promotion (append mode)");
+	pass("before_agent_start: persona persists after promotion");
 
 	// --- Subagent session: exempt everywhere ---
 	const subManager = SessionManager.create(tmp);
@@ -147,15 +184,37 @@ try {
 	expect(subStart).toBeUndefined();
 	pass("subagent: original system prompt preserved");
 
-	const subRequest = await subRunner.emitBeforeProviderRequest(anthropicPayload(), undefined);
-	expect(subRequest.max_tokens).toBe(64000);
-	expect(subRequest.tools).toHaveLength(4);
-	pass("subagent: full catalog from the first request");
-
 	const subUser = userMessage();
 	const subContext = await subRunner.emitContext([subUser]);
 	expect(subContext).toEqual([subUser]);
 	pass("subagent: no developer message injected");
+
+	// --- Broken markers: disable, notify once, self-heal ---
+	const noticesBefore = sentMessages.length;
+	const brokenManager = SessionManager.create(tmp);
+	const brokenRunner = new ExtensionRunner(loadResult.extensions, loadResult.runtime, tmp, brokenManager, modelRegistry);
+	brokenRunner.initialize(actions as never, contextActions(BROKEN_PROMPT) as never);
+
+	await brokenRunner.emit({ type: "session_start" });
+	expect(sentMessages.length).toBe(noticesBefore + 1);
+	const notice = sentMessages[sentMessages.length - 1];
+	expect(notice.message.display).toBe(true);
+	expect(notice.options?.triggerTurn).toBe(false);
+	pass("session_start with broken markers: one visible notification");
+
+	const brokenStart = await brokenRunner.emitBeforeAgentStart("hello", undefined, BROKEN_PROMPT);
+	expect(brokenStart).toBeUndefined();
+	expect(sentMessages.length).toBe(noticesBefore + 1);
+	pass("broken markers: prompt untouched, notification deduplicated");
+
+	brokenManager.appendMessage(toolCallMessage());
+	const brokenContext = await brokenRunner.emitContext([userMessage()]);
+	expect(brokenContext).toHaveLength(1);
+	pass("broken markers: no developer message even after promotion");
+
+	const healedStart = await brokenRunner.emitBeforeAgentStart("hello again", undefined, FULL_PROMPT);
+	expect(healedStart?.systemPrompt).toEqual([PERSONA]);
+	pass("markers recovered: extension self-heals at the next agent start");
 
 	console.log("\nL2 smoke: all checks passed.");
 } finally {

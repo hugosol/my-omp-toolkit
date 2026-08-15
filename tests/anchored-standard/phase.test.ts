@@ -3,15 +3,11 @@ import { describe, test, expect } from "bun:test";
 import {
 	createPhaseTracker,
 	hasSessionContext,
-	hasToolCallBlock,
 	isSubagent,
 	scanPromotion,
 	type AgentRegistryLike,
 	type PhaseContext,
 } from "../../extensions/anchored-standard/phase";
-import { DEFAULT_CONFIG, PROMOTE_EVENTS } from "../../extensions/anchored-standard/config";
-
-const config = { ...DEFAULT_CONFIG, promoteEvents: PROMOTE_EVENTS.either };
 
 const ctx = (entries: unknown[] = [], options: { id?: string; file?: string } = {}): PhaseContext => ({
 	sessionManager: {
@@ -33,44 +29,19 @@ const registry = (refs: Array<{ kind?: string; sessionFile?: string | null }>): 
 	list: () => refs,
 });
 
-describe("hasToolCallBlock", () => {
-	test("detects tool call blocks in assistant content", () => {
-		expect(hasToolCallBlock(assistantEntry([toolCallBlock]).message)).toBe(true);
-	});
-
-	test("ignores text-only content", () => {
-		expect(hasToolCallBlock(assistantEntry([]).message)).toBe(false);
-	});
-
-	test("ignores non-message values", () => {
-		expect(hasToolCallBlock(null)).toBe(false);
-		expect(hasToolCallBlock({ content: "text" })).toBe(false);
-	});
-});
-
 describe("scanPromotion", () => {
-	test("either mode: any assistant message promotes", () => {
-		expect(scanPromotion([userEntry, assistantEntry([])], PROMOTE_EVENTS.either)).toBe(true);
-	});
-
-	test("either mode: a tool call promotes", () => {
-		expect(scanPromotion([assistantEntry([toolCallBlock])], PROMOTE_EVENTS.either)).toBe(true);
-	});
-
-	test("tool-call mode: text-only replies do not promote", () => {
-		expect(scanPromotion([assistantEntry([])], PROMOTE_EVENTS["tool-call"])).toBe(false);
-	});
-
-	test("tool-call mode: tool calls promote", () => {
-		expect(scanPromotion([assistantEntry([toolCallBlock])], PROMOTE_EVENTS["tool-call"])).toBe(true);
+	test("an assistant message promotes, with or without tool calls", () => {
+		expect(scanPromotion([assistantEntry([])])).toBe(true);
+		expect(scanPromotion([assistantEntry([toolCallBlock])])).toBe(true);
 	});
 
 	test("user messages never promote", () => {
-		expect(scanPromotion([userEntry], PROMOTE_EVENTS.either)).toBe(false);
+		expect(scanPromotion([userEntry])).toBe(false);
 	});
 
-	test("non-message entries are skipped", () => {
-		expect(scanPromotion([{ type: "model_change" }], PROMOTE_EVENTS.either)).toBe(false);
+	test("non-message and malformed entries are skipped", () => {
+		expect(scanPromotion([{ type: "model_change" }])).toBe(false);
+		expect(scanPromotion([null, { type: "message" }, { type: "message", message: { role: "user" } }])).toBe(false);
 	});
 });
 
@@ -94,7 +65,7 @@ describe("isSubagent", () => {
 
 describe("createPhaseTracker", () => {
 	const trackerFor = (refs: Array<{ kind?: string; sessionFile?: string | null }> = []) =>
-		createPhaseTracker(config, () => registry(refs));
+		createPhaseTracker(() => registry(refs));
 
 	test("unpromoted sessions are not promoted", () => {
 		const tracker = trackerFor();

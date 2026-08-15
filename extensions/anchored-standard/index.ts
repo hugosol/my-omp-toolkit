@@ -1,54 +1,49 @@
 /**
- * anchored-standard — two-phase bootstrap extension for Oh My Pi.
+ * anchored-standard — persona-anchored extension for Oh My Pi.
  *
- * Mirrors the dsh-anchored-standard preset mechanics on the omp ExtensionAPI:
+ * Main sessions run with `personaText` as the system prompt for the whole
+ * session. The full omp prompt is captured at each agent start; once the
+ * session records its first assistant message, every context assembly gets
+ * the captured prompt as a developer message at index 1 — with the omp
+ * persona section ("§ Role" … "§ Runtime") stripped, so the model regains
+ * omp's tool docs, skills, rules, and project context without a second
+ * persona competing with the system prompt.
  *
- *  1. Tool surface. While the session is unpromoted, the provider wire request
- *     is narrowed to one platform shell plus the common tools (default
- *     `read`); after promotion every provider request carries the full
- *     catalog.
- *  2. Output budget. The first model requests are capped at
- *     `bootstrapMaxTokens` (default 1024) via the same wire rewrite. The cap
- *     is applied per request and simply stops being applied after promotion —
- *     nothing is injected into harness state, so there is no cap-leak.
- *  3. Injected context. The system prompt is replaced with a minimal persona
- *     for the bootstrap phase (and, in `restoreMode: "append"`, for the whole
- *     session). The full omp prompt — main template (skills list, rules),
- *     project prompt (AGENTS.md digests), safety blocks — is captured at
- *     `before_agent_start` and, after promotion, appended as one developer
- *     message so the system-prompt prefix never changes. `restoreMode:
- *     "system-block"` restores the original prompt as system blocks instead;
- *     `"none"` keeps the persona for the whole session.
+ * omp prompt contract: the strip filter depends on the "§ Role"/"§ Runtime"
+ * section markers. The base prompt is checked at `session_start` and the
+ * per-turn prompt again at `before_agent_start`. Missing markers disable the
+ * extension for that session — every hook returns the untouched input — and
+ * the user is notified once per session (file log + visible session message;
+ * TUI notify/status; stderr in print mode).
  *
- * Promotion is derived from durable session entries, so resume/reload
- * preserves the phase. Subagents (registry kind !== "main") are always
- * exempt: their first request carries the full catalog.
- *
- * Robustness (same philosophy as the dsh preset):
- *  - Promotion decisions are memoized per session id for this process.
- *  - Every filter degrades to the untouched request on its own failure, with
- *    a one-time warning — a bug here can never brick a session or eat context.
+ * Robustness:
+ *  - Subagents (registry kind !== "main") are exempt everywhere.
+ *  - Every hook degrades to the untouched input on its own failure, with a
+ *    one-time warning — a bug here can never brick a session or eat context.
  *  - Invalid config fails at load time (the extension loader surfaces it).
  *  - No network calls, no telemetry.
  */
 
 import type {
 	BeforeAgentStartEvent,
-	BeforeProviderRequestEvent,
 	ContextEvent,
 	ExtensionAPI,
 	ExtensionContext,
+	SessionStartEvent,
 } from "@oh-my-pi/pi-coding-agent";
 
 import { loadConfig } from "./config";
 import { createPhaseTracker, hasSessionContext, isSubagent } from "./phase";
-import { capMaxTokens, narrowTools } from "./transform";
+import { stripCapturedPrompt } from "./strip";
 
 /** Diagnostic name used by loader diagnostics. */
 export const name = "anchored-standard";
 
 // omp runs extensions under bun; import.meta.dir is the module's directory.
 const extensionDir = (import.meta as unknown as { dir?: string }).dir ?? "";
+
+const ANCHOR_BROKEN_MESSAGE =
+	"anchored-standard: omp 提示词结构变化（§ Role/§ Runtime 锚点缺失），本会话已停用该扩展。";
 
 export default async function anchoredStandard(pi: ExtensionAPI): Promise<void> {
 	const { config, missing } = await loadConfig(`${extensionDir}/config.json`);
@@ -68,65 +63,118 @@ export default async function anchoredStandard(pi: ExtensionAPI): Promise<void> 
 		warnOnce("config-missing", "anchored-standard: config.json not found next to index.ts; using defaults");
 	}
 
-	const tracker = createPhaseTracker(config, () => pi.pi.AgentRegistry.global());
-	/** Latest full omp prompt captured at agent start (append mode source). */
+	const tracker = createPhaseTracker(() => pi.pi.AgentRegistry.global());
+
+	/** Latest full omp prompt captured at agent start (append source). */
 	let capturedPrompt: string[] = [];
+	/** Sessions whose omp prompt lost the strip markers: every hook stays untouched. */
+	const anchorBroken = new Set<string>();
+	/** Sessions already notified about broken anchors (one notification per session). */
+	const notified = new Set<string>();
+
+	const sessionIdOf = (ctx: ExtensionContext): string | undefined => {
+		try {
+			const sid = ctx.sessionManager?.getSessionId?.();
+			return typeof sid === "string" && sid.length > 0 ? sid : undefined;
+		} catch {
+			return undefined;
+		}
+	};
+
+	/** True when no captured block carries both strip markers (nothing would be stripped). */
+	const anchorsBroken = (blocks: readonly string[]): boolean => !stripCapturedPrompt(blocks).stripped;
+
+	const notifyAnchorBroken = (ctx: ExtensionContext): void => {
+		const sid = sessionIdOf(ctx);
+		if (!sid || notified.has(sid)) return;
+		notified.add(sid);
+		try {
+			pi.logger.warn(ANCHOR_BROKEN_MESSAGE);
+		} catch {
+			// Logger unavailable — user-facing channels below still run.
+		}
+		try {
+			pi.sendMessage(
+				{
+					customType: "anchored-standard/anchor-mismatch",
+					content: ANCHOR_BROKEN_MESSAGE,
+					display: true,
+					attribution: "agent",
+				},
+				{ triggerTurn: false },
+			);
+		} catch {
+			// A missing sendMessage transport must never take down session start.
+		}
+		try {
+			if (ctx.hasUI) {
+				ctx.ui.notify(ANCHOR_BROKEN_MESSAGE, "warning");
+				ctx.ui.setStatus("anchored-standard", "已停用：omp 提示词锚点缺失");
+			}
+		} catch {
+			// UI is unavailable in headless modes.
+		}
+		if (ctx.mode === "print") {
+			console.error(ANCHOR_BROKEN_MESSAGE);
+		}
+	};
+
+	pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext) => {
+		try {
+			if (isSubagent(ctx, pi.pi.AgentRegistry.global())) return;
+			const sid = sessionIdOf(ctx);
+			if (!sid) return;
+			const current = ctx.getSystemPrompt();
+			if (!Array.isArray(current) || current.length === 0) return; // nothing to check yet
+			if (anchorsBroken(current.map(String))) {
+				anchorBroken.add(sid);
+				notifyAnchorBroken(ctx);
+			}
+		} catch {
+			// A startup check failure must never block session start.
+		}
+	});
 
 	pi.on("before_agent_start", async (event: BeforeAgentStartEvent, ctx: ExtensionContext) => {
-		if (!hasSessionContext(ctx)) return;
-		try {
-			const current = Array.isArray(event.systemPrompt) ? [...event.systemPrompt] : [];
-			if (current.length > 0) capturedPrompt = current;
-			if (isSubagent(ctx, pi.pi.AgentRegistry.global())) return;
-			if (config.restoreMode === "system-block" && tracker.isPromoted(ctx)) return;
-			return { systemPrompt: [config.personaText] };
-		} catch (error) {
-			// A filter bug must never eat the real prompt.
-			warnOnce("agent-start", `anchored-standard: before_agent_start filter failed, keeping original prompt: ${String((error as Error)?.message ?? error)}`);
-			return;
-		}
-	});
-
-	pi.on("before_provider_request", async (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
-		try {
-			if (tracker.isPromoted(ctx)) return;
-			let out = event.payload;
-			const cap = capMaxTokens(out, config.bootstrapMaxTokens);
-			if (cap.unrecognized) {
-				warnOnce("cap-shape", "anchored-standard: unrecognized provider payload shape, output cap skipped");
-			}
-			out = cap.payload;
-			const narrowed = narrowTools(out, config);
-			if (narrowed.degraded) {
-				warnOnce(
-					"tools",
-					`anchored-standard: expected exactly one bootstrap shell and every common tool; shells=${JSON.stringify(narrowed.degraded.shells)}, missing=${JSON.stringify(narrowed.degraded.missing)} — bootstrap disabled, full catalog exposed`,
-				);
-				out = narrowed.payload;
-			} else {
-				out = narrowed.payload;
-			}
-			return out === event.payload ? undefined : out;
-		} catch (error) {
-			// A filter bug must never brick a request: leave it untouched.
-			warnOnce("request", `anchored-standard: request filter failed, leaving request untouched: ${String((error as Error)?.message ?? error)}`);
-			return;
-		}
-	});
-
-	pi.on("context", async (event: ContextEvent, ctx: ExtensionContext) => {
-		if (config.restoreMode !== "append") return;
 		if (!hasSessionContext(ctx)) return;
 		try {
 			// Explicit subagent gate: the real runtime re-binds a fresh extension
 			// instance per session, but a shared instance must never leak a
 			// captured main-session prompt into a subagent context.
 			if (isSubagent(ctx, pi.pi.AgentRegistry.global())) return;
+			const current = Array.isArray(event.systemPrompt) ? event.systemPrompt.map(String) : [];
+			if (current.length > 0) capturedPrompt = current;
+			const sid = sessionIdOf(ctx);
+			if (!sid) return;
+			if (anchorsBroken(current)) {
+				anchorBroken.add(sid);
+				notifyAnchorBroken(ctx);
+				return; // keep the original prompt
+			}
+			anchorBroken.delete(sid); // markers recovered — self-heal
+			return { systemPrompt: [config.personaText] };
+		} catch (error) {
+			// A filter bug must never eat the real prompt.
+			warnOnce(
+				"agent-start",
+				`anchored-standard: before_agent_start filter failed, keeping original prompt: ${String((error as Error)?.message ?? error)}`,
+			);
+			return;
+		}
+	});
+
+	pi.on("context", async (event: ContextEvent, ctx: ExtensionContext) => {
+		if (!hasSessionContext(ctx)) return;
+		try {
+			if (isSubagent(ctx, pi.pi.AgentRegistry.global())) return;
+			const sid = sessionIdOf(ctx);
+			if (!sid || anchorBroken.has(sid)) return;
 			if (!tracker.isPromoted(ctx)) return;
 			if (!Array.isArray(event.messages) || capturedPrompt.length === 0) return;
+			const { content } = stripCapturedPrompt(capturedPrompt);
 			const devMessage = {
 				role: "developer" as const,
-				content: capturedPrompt.join("\n\n"),
+				content,
 				timestamp: Date.now(),
 			};
 			const insertAt = Math.min(1, event.messages.length);
@@ -135,7 +183,10 @@ export default async function anchoredStandard(pi: ExtensionAPI): Promise<void> 
 			};
 		} catch (error) {
 			// A filter bug must never eat the user's context.
-			warnOnce("context", `anchored-standard: append filter failed, keeping original messages: ${String((error as Error)?.message ?? error)}`);
+			warnOnce(
+				"context",
+				`anchored-standard: context filter failed, keeping original messages: ${String((error as Error)?.message ?? error)}`,
+			);
 			return;
 		}
 	});
