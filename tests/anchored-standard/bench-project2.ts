@@ -31,6 +31,7 @@ import {
 	type RequestStats,
 	type WireRequest,
 } from "./bench-anchor-style";
+import { eArmSource } from "./matrix-anchor-style";
 
 const MODELTEST_ROOT = process.env.MODELTEST_ROOT ?? "E:/Developer/myhub/dsh/modeltest";
 const WORKSPACE = join(MODELTEST_ROOT, "workspace");
@@ -54,7 +55,7 @@ const THINKING = "max";
 const MODEL_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 const EVAL_TIMEOUT_MS = 30 * 60 * 1000;
 
-type Arm = "anchored" | "control";
+type Arm = "anchored" | "control" | "e";
 
 interface RunRecord {
 	arm: Arm;
@@ -84,9 +85,25 @@ function parseArgs(argv: string[]) {
 		throw new Error(`--runs must be a positive integer, got ${JSON.stringify(runsRaw)}`);
 	}
 	const armRaw = flag(argv, "arm");
-	const arm: Arm | undefined = armRaw === "anchored" || armRaw === "control" ? armRaw : undefined;
+	const arm: Arm | undefined = armRaw === "anchored" || armRaw === "control" || armRaw === "e" ? armRaw : undefined;
 	if (armRaw !== undefined && arm === undefined) {
-		throw new Error(`--arm must be anchored or control, got ${JSON.stringify(armRaw)}`);
+		throw new Error(`--arm must be anchored, control, or e; got ${JSON.stringify(armRaw)}`);
+	}
+	const armsRaw = flag(argv, "arms");
+	const arms: Arm[] = armsRaw
+		? armsRaw
+				.split(",")
+				.map(value => value.trim())
+				.filter(value => value.length > 0)
+				.map(value => {
+					if (value !== "anchored" && value !== "control" && value !== "e") {
+						throw new Error(`--arms may only contain anchored, control, e; got ${JSON.stringify(value)}`);
+					}
+					return value;
+				})
+		: [];
+	if (arms.length === 0 && arm !== undefined) {
+		arms.push(arm);
 	}
 	const timeoutRaw = flag(argv, "timeout");
 	const timeoutMs = timeoutRaw === undefined ? MODEL_TIMEOUT_MS : Number.parseInt(timeoutRaw, 10) * 1000;
@@ -99,7 +116,7 @@ function parseArgs(argv: string[]) {
 			.map(value => value.trim())
 			.filter(value => value.length > 0),
 	);
-	return { runs, arm, timeoutMs, skip, include: flag(argv, "include") };
+	return { runs, arms, timeoutMs, skip, include: flag(argv, "include") };
 }
 
 async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -167,14 +184,18 @@ async function resetProject(runDir: string): Promise<void> {
 	}
 }
 
-async function runModel(arm: Arm, runDir: string, sessionDir: string, probeEntry: string, timeoutMs: number): Promise<{
+async function runModel(
+	arm: Arm,
+	armEntries: string[],
+	runDir: string,
+	sessionDir: string,
+	probeEntry: string,
+	timeoutMs: number,
+): Promise<{
 	exitCode: number | null;
 	durationMs: number;
 }> {
-	const armFlags =
-		arm === "anchored"
-			? ["--trusted-extension", EXT_ENTRY, "--trusted-extension", probeEntry]
-			: ["--trusted-extension", probeEntry];
+	const extensionFlags = [...armEntries, probeEntry].flatMap(entry => ["--trusted-extension", entry]);
 	const prompt = candidatePrompt();
 	// Multi-line argv is truncated by the omp.cmd shim; @file is the omp-native
 	// full-content path (processFileArguments reads the whole file).
@@ -192,7 +213,7 @@ async function runModel(arm: Arm, runDir: string, sessionDir: string, probeEntry
 		THINKING,
 		"--no-title",
 		"--auto-approve",
-		...armFlags,
+		...extensionFlags,
 		`@${promptPath}`,
 	];
 	console.log(`[model] ${arm}: ${cmdArgs.slice(0, 8).join(" ")} …`);
@@ -225,7 +246,12 @@ interface EvalScores {
 
 async function runEval(arm: Arm, runIndex: number, runDir: string): Promise<EvalScores> {
 	console.log("[eval] run_full_eval.py");
-	const harness = arm === "anchored" ? "omp-anchored-standard" : "omp-control";
+	const harnessNames: Record<Arm, string> = {
+		anchored: "omp-anchored-standard",
+		control: "omp-control",
+		e: "omp-e-persona-anchor",
+	};
+	const harness = harnessNames[arm];
 	const result = await runPython(
 		[
 			"evaluator/run_full_eval.py",
@@ -274,7 +300,7 @@ async function runEval(arm: Arm, runIndex: number, runDir: string): Promise<Eval
 
 async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2));
-	const arms: Arm[] = args.arm ? [args.arm] : ["anchored", "control"];
+	const arms: Arm[] = args.arms.length > 0 ? args.arms : ["anchored", "control"];
 	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 	const root = join(import.meta.dir, "project2-runs", timestamp);
 	mkdirSync(root, { recursive: true });
@@ -283,6 +309,20 @@ async function main(): Promise<void> {
 	mkdirSync(probeDir, { recursive: true });
 	const probeEntry = join(probeDir, "probe.ts");
 	writeFileSync(probeEntry, PROBE_SOURCE);
+
+	const armEntries: Record<Arm, string[]> = {
+		anchored: [EXT_ENTRY],
+		control: [],
+		e: [],
+	};
+	if (arms.includes("e")) {
+		const config = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "extensions", "anchored-standard", "config.json"), "utf8")) as {
+			personaText: string;
+		};
+		const eEntry = join(probeDir, "e-arm.ts");
+		writeFileSync(eEntry, eArmSource(config.personaText));
+		armEntries.e = [eEntry];
+	}
 
 	console.log(`model=${MODEL} thinking=${THINKING} arms=${arms.join(",")} runs=${args.runs}`);
 	console.log(`modeltest=${MODELTEST_ROOT}`);
@@ -304,7 +344,14 @@ async function main(): Promise<void> {
 			console.log(`\n=== ${arm} ${run}/${args.runs} ===`);
 
 			await resetProject(runDir);
-			const { exitCode, durationMs } = await runModel(arm, runDir, sessionDir, probeEntry, args.timeoutMs);
+			const { exitCode, durationMs } = await runModel(
+				arm,
+				armEntries[arm],
+				runDir,
+				sessionDir,
+				probeEntry,
+				args.timeoutMs,
+			);
 
 			const sessionFile = newestJsonl(sessionDir);
 			const requests = sessionFile ? parseSession(sessionFile) : [];

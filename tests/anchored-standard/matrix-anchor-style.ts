@@ -74,7 +74,7 @@ export default function matrixProbe(pi: { on(event: "before_provider_request", h
 }
 `;
 
-type Arm = "A" | "B" | "C" | "D";
+type Arm = "A" | "B" | "C" | "D" | "E";
 
 function flag(args: string[], name: string): string | undefined {
 	const idx = args.indexOf(`--${name}`);
@@ -88,7 +88,14 @@ function parseArgs(argv: string[]) {
 	if (!Number.isSafeInteger(reps) || reps < 1) {
 		throw new Error(`--reps must be a positive integer, got ${JSON.stringify(repsRaw)}`);
 	}
-	return { reps };
+	const onlyRaw = flag(argv, "only");
+	const only = onlyRaw === undefined ? undefined : onlyRaw;
+	if (only !== undefined && !["A", "B", "C", "D", "E"].includes(only)) {
+		throw new Error(`--only must be one of A,B,C,D,E, got ${JSON.stringify(onlyRaw)}`);
+	}
+	// Validated against the arm list above.
+	const armFilter = only as Arm | undefined;
+	return { reps, only: armFilter };
 }
 
 interface RunRecord {
@@ -142,6 +149,81 @@ export default function capOnly(pi: { on(event: "before_provider_request", handl
 			}
 		}
 		return undefined;
+	});
+}
+`;
+}
+
+export function eArmSource(persona: string): string {
+	return `
+interface BeforeAgentStartEvent {
+	systemPrompt?: string[];
+}
+
+interface BeforeAgentStartResult {
+	systemPrompt?: string[];
+}
+
+interface ContextEvent {
+	messages?: unknown[];
+}
+
+interface ContextResult {
+	messages?: unknown[];
+}
+
+interface PhaseContext {
+	sessionManager?: {
+		getEntries?: () => unknown[];
+	};
+}
+
+function isAssistantMessage(entry: unknown): boolean {
+	if (typeof entry !== "object" || entry === null) return false;
+	if (!("type" in entry) || entry.type !== "message" || !("message" in entry)) return false;
+	const message = entry.message;
+	return typeof message === "object" && message !== null && "role" in message && message.role === "assistant";
+}
+
+/** Strip the persona sections between § Role and § Runtime; keep safety
+ * conventions, skills/rules, URLs, tool docs, and the PROJECT block. */
+function stripPersonaSections(block: string): string {
+	const roleAt = block.indexOf("§ Role");
+	const runtimeAt = block.indexOf("§ Runtime");
+	if (roleAt !== -1 && runtimeAt > roleAt) {
+		return block.slice(0, roleAt) + block.slice(runtimeAt);
+	}
+	return block;
+}
+
+export default function eArm(pi: {
+	on(event: "before_agent_start", handler: (event: BeforeAgentStartEvent, ctx: PhaseContext) => BeforeAgentStartResult | undefined | Promise<BeforeAgentStartResult | undefined>): void;
+	on(event: "context", handler: (event: ContextEvent, ctx: PhaseContext) => ContextResult | undefined | Promise<ContextResult | undefined>): void;
+}) {
+	let captured: string[] = [];
+	let appendLogged = false;
+	pi.on("before_agent_start", event => {
+		if (Array.isArray(event.systemPrompt) && event.systemPrompt.length > 0) {
+			captured = event.systemPrompt.map(String);
+		}
+		return { systemPrompt: [${JSON.stringify(persona)}] };
+	});
+	pi.on("context", (event, ctx) => {
+		if (captured.length === 0 || !Array.isArray(event.messages)) return undefined;
+		const entries = ctx.sessionManager?.getEntries?.() ?? [];
+		if (!entries.some(isAssistantMessage)) return undefined;
+		const content = captured.map(stripPersonaSections).join("\\n\\n");
+		if (!appendLogged) {
+			appendLogged = true;
+			console.error("E_APPEND " + JSON.stringify({ chars: content.length, head: content.slice(0, 200) }));
+		}
+		const developerMessage = {
+			role: "developer",
+			content,
+			timestamp: Date.now(),
+		};
+		const insertAt = Math.min(1, event.messages.length);
+		return { messages: [...event.messages.slice(0, insertAt), developerMessage, ...event.messages.slice(insertAt)] };
 	});
 }
 `;
@@ -275,7 +357,8 @@ async function runOne(opts: {
 }
 
 async function main(): Promise<void> {
-	const { reps } = parseArgs(process.argv.slice(2));
+	const { reps, only } = parseArgs(process.argv.slice(2));
+	const arms: Arm[] = only ? [only] : ["A", "B", "C", "D", "E"];
 	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 	const root = join(import.meta.dir, "matrix-runs", timestamp);
 	mkdirSync(root, { recursive: true });
@@ -286,12 +369,14 @@ async function main(): Promise<void> {
 	const probeEntry = writeVariant(variants, "probe", MATRIX_PROBE_SOURCE);
 	const personaEntry = writeVariant(variants, "persona-only", personaOnlySource(persona));
 	const capEntry = writeVariant(variants, "cap-only", capOnlySource(cap));
+	const eEntry = writeVariant(variants, "e-arm", eArmSource(persona));
 
 	const armEntries: Record<Arm, string[]> = {
 		A: [ANCHORED_ENTRY],
 		B: [personaEntry],
 		C: [capEntry],
 		D: [],
+		E: [eEntry],
 	};
 
 	console.log(`model=${MODEL} thinking=${THINKING} reps=${reps} persona=${JSON.stringify(persona)} cap=${cap}`);
@@ -300,7 +385,7 @@ async function main(): Promise<void> {
 	console.log(`task=${TASK}\n`);
 
 	const records: RunRecord[] = [];
-	for (const arm of ["A", "B", "C", "D"] as Arm[]) {
+	for (const arm of arms) {
 		for (let rep = 1; rep <= reps; rep += 1) {
 			const runDir = join(root, `${arm}-${rep}`);
 			const sessionDir = join(runDir, "session");
@@ -326,7 +411,7 @@ async function main(): Promise<void> {
 	}
 
 	console.log("\n=== aggregate ===");
-	for (const arm of ["A", "B", "C", "D"] as Arm[]) {
+	for (const arm of arms) {
 		const armRecords = records.filter(record => record.arm === arm);
 		const classes = armRecords.map(record => classify(record.opening, record.markers));
 		const minimal = classes.filter(value => value === "minimal-like").length;
@@ -348,4 +433,7 @@ async function main(): Promise<void> {
 	console.log(`records=${join(root, "records.json")}`);
 }
 
-await main();
+const entryMeta = import.meta as unknown as { main?: boolean };
+if (entryMeta.main) {
+	await main();
+}
