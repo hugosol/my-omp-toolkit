@@ -1,0 +1,130 @@
+/**
+ * Promotion phase tracking: subagent detection and the memoized promotion
+ * scan over durable session entries. Pure state machine — no extension
+ * runtime access, unit tested with structural fakes.
+ */
+
+import type { AnchoredConfig } from "./config";
+
+/** Structural view of the ExtensionContext pieces this module needs. */
+export interface PhaseContext {
+	sessionManager?: {
+		getSessionId?: () => string;
+		getSessionFile?: () => string | undefined;
+		getEntries?: () => unknown[];
+	};
+}
+
+/** Structural view of one injected AgentRegistry entry. */
+export interface RegistryRefLike {
+	kind?: string;
+	sessionFile?: string | null;
+	session?: unknown;
+}
+
+/** Structural view of the injected AgentRegistry surface. */
+export interface AgentRegistryLike {
+	list?: () => RegistryRefLike[];
+}
+
+/**
+ * Whether an assistant message contains a tool call block — the omp
+ * equivalent of dsh's durable `tool/call` event.
+ */
+export function hasToolCallBlock(message: unknown): boolean {
+	if (typeof message !== "object" || message === null || !("content" in message)) return false;
+	const content = message.content;
+	if (!Array.isArray(content)) return false;
+	return content.some(
+		block => typeof block === "object" && block !== null && "type" in block && block.type === "toolCall",
+	);
+}
+
+/**
+ * Scan durable session entries for a promotion signal.
+ * `assistant/message` = any assistant message entry;
+ * `tool/call` = an assistant message carrying a tool call block.
+ */
+export function scanPromotion(entries: unknown[], promoteEvents: readonly string[]): boolean {
+	return entries.some(entry => {
+		if (typeof entry !== "object" || entry === null) return false;
+		if (!("type" in entry) || entry.type !== "message" || !("message" in entry)) return false;
+		const message = entry.message;
+		if (typeof message !== "object" || message === null) return false;
+		if (!("role" in message) || message.role !== "assistant") return false;
+		if (promoteEvents.includes("assistant/message")) return true;
+		return promoteEvents.includes("tool/call") && hasToolCallBlock(message);
+	});
+}
+
+/**
+ * Subagent detection via the injected registry: registry kind is "main"
+ * exactly for the driving agent; task-spawned children ("sub") and passive
+ * advisors are exempt so their first request always carries the full catalog.
+ * Best-effort: an unavailable registry or an unmatched session falls back to
+ * main semantics (bootstrap applies).
+ */
+export function isSubagent(ctx: PhaseContext, registry: AgentRegistryLike | undefined): boolean {
+	if (!registry || typeof registry.list !== "function") return false;
+	const file = ctx.sessionManager?.getSessionFile?.();
+	const sid = ctx.sessionManager?.getSessionId?.();
+	for (const ref of registry.list()) {
+		if (!ref) continue;
+		if (file !== undefined && ref.sessionFile === file) return ref.kind !== "main";
+		const session = ref.session;
+		if (sid !== undefined && typeof session === "object" && session !== null && "getSessionId" in session) {
+			const getSessionId = session.getSessionId;
+			if (typeof getSessionId === "function" && getSessionId() === sid) return ref.kind !== "main";
+		}
+	}
+	return false;
+}
+
+export interface PhaseTracker {
+	/**
+	 * Whether the session has reached the promoted (full-catalog) phase.
+	 * Subagents and sessions without a readable session context are always
+	 * "promoted" — bootstrap transforms must never apply where the phase
+	 * cannot be proven unpromoted. Promoted sessions are memoized per id.
+	 */
+	isPromoted(ctx: PhaseContext): boolean;
+	/** Test hook: drop all memoized decisions. */
+	reset(): void;
+}
+
+/** Whether the context carries a readable session id. */
+export function hasSessionContext(ctx: PhaseContext): boolean {
+	try {
+		const sid = ctx.sessionManager?.getSessionId?.();
+		return typeof sid === "string" && sid.length > 0;
+	} catch {
+		return false;
+	}
+}
+
+export function createPhaseTracker(
+	config: AnchoredConfig,
+	registryProvider: () => AgentRegistryLike | undefined,
+): PhaseTracker {
+	const promoted = new Set<string>();
+
+	return {
+		isPromoted(ctx) {
+			if (isSubagent(ctx, registryProvider())) return true;
+			if (!hasSessionContext(ctx)) return true;
+			const sid = ctx.sessionManager?.getSessionId?.() ?? "";
+			if (promoted.has(sid)) return true;
+			try {
+				const entries = ctx.sessionManager?.getEntries?.() ?? [];
+				const hit = scanPromotion(entries, config.promoteEvents);
+				if (hit) promoted.add(sid);
+				return hit;
+			} catch {
+				return true; // a scan failure must never trap a session in bootstrap
+			}
+		},
+		reset() {
+			promoted.clear();
+		},
+	};
+}

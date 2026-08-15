@@ -1,2 +1,4 @@
 node_modules/
 .omp/
+/tests/anchored-standard/matrix-runs
+/tests/anchored-standard/project2-runs

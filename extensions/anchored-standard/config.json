@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "promoteOn": "either",
+  "bootstrapMaxTokens": 1024,
+  "personaText": "You are a helpful software engineer assistant.",
+  "restoreMode": "append",
+  "shellTools": ["bash", "pwsh"],
+  "commonTools": ["read"]
+}
