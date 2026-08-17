@@ -8,7 +8,7 @@ import {
   fmtTokens,
   rmbCost,
   fmtCost,
-  ioRatio,
+  cacheInOutRatio,
   buildStatusLine,
 } from "../../extensions/deepseek-cost/cost-calc";
 
@@ -277,35 +277,38 @@ describe("fmtCost", () => {
 });
 
 // ============================================================
-// ioRatio
+// cacheInOutRatio
 // ============================================================
 
-describe("ioRatio", () => {
+describe("cacheInOutRatio", () => {
   test("returns placeholder when total cost is zero", () => {
-    expect(ioRatio({ input: 0, cacheRead: 0, output: 0 }, PRO_PEAK)).toBe("\u00A5I/O: --:--");
+    expect(cacheInOutRatio({ input: 0, cacheRead: 0, output: 0 }, PRO_PEAK)).toBe("\uFFE5Cache/In/Out：--:--:--");
   });
 
-  test("returns 100:0 when only input cost exists", () => {
-    expect(ioRatio({ input: 1_000_000, cacheRead: 0, output: 0 }, PRO_PEAK)).toBe("\u00A5I/O: 100:0");
+  test("returns 0:100:0 when only input cost exists", () => {
+    expect(cacheInOutRatio({ input: 1_000_000, cacheRead: 0, output: 0 }, PRO_PEAK)).toBe("\uFFE5Cache/In/Out：0:100:0");
   });
 
-  test("returns 0:100 when only output cost exists", () => {
-    expect(ioRatio({ input: 0, cacheRead: 0, output: 1_000_000 }, PRO_PEAK)).toBe("\u00A5I/O: 0:100");
+  test("returns 100:0:0 when only cache cost exists", () => {
+    expect(cacheInOutRatio({ input: 0, cacheRead: 1_000_000, output: 0 }, PRO_PEAK)).toBe("\uFFE5Cache/In/Out：100:0:0");
   });
 
-  test("returns proportional ratio for mixed usage", () => {
-    // input 1M peak (9 RMB) + output 500K peak (13.5 RMB) -> 40:60
-    const result = ioRatio({ input: 1_000_000, cacheRead: 0, output: 500_000 }, PRO_PEAK);
-    expect(result).toContain("40:60");
+  test("returns 0:0:100 when only output cost exists", () => {
+    expect(cacheInOutRatio({ input: 0, cacheRead: 0, output: 1_000_000 }, PRO_PEAK)).toBe("\uFFE5Cache/In/Out：0:0:100");
   });
 
-  test("cache-heavy ratio differs between pro and flash", () => {
-    // input 1M + cache 1M + output 100K:
-    // pro peak: iCost = 9 + 0.3 = 9.3, oCost = 2.7 -> 9.3/12 = 77.5% -> 78:22
-    // flash off-peak: iCost = 1.5 + 0.05 = 1.55, oCost = 0.45 -> 1.55/2 = 77.5% -> 78:22
-    const usage = { input: 1_000_000, cacheRead: 1_000_000, output: 100_000 };
-    expect(ioRatio(usage, PRO_PEAK)).toContain("78:22");
-    expect(ioRatio(usage, FLASH_OFF_PEAK)).toContain("78:22");
+  test("returns three-way cost ratio for mixed usage", () => {
+    // input 1M (¥9) + cache 1M (¥0.30) + output 100K (¥2.70), total ¥12
+    // raw: 2.5 : 75 : 22.5; largest remainder: cache wins tie -> 3:75:22
+    const result = cacheInOutRatio({ input: 1_000_000, cacheRead: 1_000_000, output: 100_000 }, PRO_PEAK);
+    expect(result).toBe("\uFFE5Cache/In/Out：3:75:22");
+  });
+
+  test("uses largest remainder so percentages sum to 100", () => {
+    // input 500K (¥4.5) + cache 200K (¥0.06) + output 100K (¥2.70), total ¥7.26
+    // raw: 0.826 : 61.983 : 37.190; floors 0+61+37=98, remainder goes to input then cache
+    const result = cacheInOutRatio({ input: 500_000, cacheRead: 200_000, output: 100_000 }, PRO_PEAK);
+    expect(result).toBe("\uFFE5Cache/In/Out：1:62:37");
   });
 });
 
@@ -364,5 +367,16 @@ describe("buildStatusLine", () => {
     const proLine = buildStatusLine(usage, false, true, PRO_PEAK);
     expect(flashLine).toContain("\u00A50.24");
     expect(proLine).toContain("\u00A51.46");
+  });
+
+  test("uses three-way cache/in/out cost ratio in all display modes", () => {
+    const usage = { input: 1_000_000, cacheRead: 1_000_000, output: 100_000 };
+    for (const pad of [true, false]) {
+      for (const detail of [true, false]) {
+        const line = buildStatusLine(usage, pad, detail, PRO_PEAK);
+        expect(line).toContain("\uFFE5Cache/In/Out：");
+        expect(line).not.toContain("\u00A5I/O:");
+      }
+    }
   });
 });

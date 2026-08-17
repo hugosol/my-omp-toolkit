@@ -119,15 +119,28 @@ function padSum(sum: number): string {
   return fmtTokens(sum).padStart(PAD_SUM);
 }
 
-/** Build ¥I/O ratio string: input+cache cost % vs output cost %. Returns "--:--" when total cost is zero. */
-export function ioRatio(usage: { input: number; cacheRead: number; output: number }, tier: PriceTier): string {
-  const iCost = rmbCost(usage.input, usage.cacheRead, 0, tier);
-  const oCost = rmbCost(0, 0, usage.output, tier);
-  const total = iCost + oCost;
-  if (total <= 0) return `\u00A5I/O: --:--`;
-  const iPct = Math.round((iCost / total) * 100);
-  const oPct = 100 - iPct;
-  return `\u00A5I/O: ${iPct}:${oPct}`;
+/** Build three-way cost ratio string: cache hit / cache-miss input / output. Returns placeholder when total cost is zero. */
+export function cacheInOutRatio(usage: { input: number; cacheRead: number; output: number }, tier: PriceTier): string {
+  const cacheCost = rmbCost(0, usage.cacheRead, 0, tier);
+  const inCost = rmbCost(usage.input, 0, 0, tier);
+  const outCost = rmbCost(0, 0, usage.output, tier);
+  const total = cacheCost + inCost + outCost;
+  if (total <= 0) return `\uFFE5Cache/In/Out：--:--:--`;
+
+  const raws = [cacheCost, inCost, outCost].map(c => (c / total) * 100);
+  const floors = raws.map(c => Math.floor(c));
+  let remaining = 100 - floors.reduce((sum, n) => sum + n, 0);
+  const order = [0, 1, 2].sort((a, b) => {
+    const diff = (raws[b] - floors[b]) - (raws[a] - floors[a]);
+    return diff !== 0 ? diff : a - b;
+  });
+  const pcts = [...floors];
+  for (const idx of order) {
+    if (remaining <= 0) break;
+    pcts[idx] += 1;
+    remaining -= 1;
+  }
+  return `\uFFE5Cache/In/Out：${pcts[0]}:${pcts[1]}:${pcts[2]}`;
 }
 
 /** Build a single-line status string for token usage. */
@@ -144,12 +157,12 @@ export function buildStatusLine(
   if (pad) {
     if (detailMode) {
       const pct = String(hitRate).padStart(3);
-      return `Input: ${padTokens(usage.cacheRead, PAD_IN)}/${padTokens(totalIn, PAD_IN)} (${pct}%)  Output: ${padTokens(usage.output, PAD_OUT)}  ${ioRatio(usage, tier)}  Sum: ${padSum(sum)}  Cost: ${padCost(cost)}`;
+      return `Input: ${padTokens(usage.cacheRead, PAD_IN)}/${padTokens(totalIn, PAD_IN)} (${pct}%)  Output: ${padTokens(usage.output, PAD_OUT)}  ${cacheInOutRatio(usage, tier)}  Sum: ${padSum(sum)}  Cost: ${padCost(cost)}`;
     }
-    return `Cache: ${String(hitRate).padStart(3)}%  ${ioRatio(usage, tier)}  Sum: ${padSum(sum)}  Cost: ${padCost(cost)}`;
+    return `Cache: ${String(hitRate).padStart(3)}%  ${cacheInOutRatio(usage, tier)}  Sum: ${padSum(sum)}  Cost: ${padCost(cost)}`;
   }
   if (detailMode) {
-    return `Input: ${fmtTokens(usage.cacheRead)}/${fmtTokens(totalIn)} (${hitRate}%)  Output: ${fmtTokens(usage.output)}  ${ioRatio(usage, tier)}  Sum: ${fmtTokens(sum)}  Cost: ${fmtCost(cost)}`;
+    return `Input: ${fmtTokens(usage.cacheRead)}/${fmtTokens(totalIn)} (${hitRate}%)  Output: ${fmtTokens(usage.output)}  ${cacheInOutRatio(usage, tier)}  Sum: ${fmtTokens(sum)}  Cost: ${fmtCost(cost)}`;
   }
-  return `Cache: ${hitRate}%  ${ioRatio(usage, tier)}  Sum: ${fmtTokens(sum)}  Cost: ${fmtCost(cost)}`;
+  return `Cache: ${hitRate}%  ${cacheInOutRatio(usage, tier)}  Sum: ${fmtTokens(sum)}  Cost: ${fmtCost(cost)}`;
 }
