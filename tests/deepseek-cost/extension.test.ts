@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 import deepseekCost from "../../extensions/deepseek-cost/index";
+import { __setOmpModuleLoaderForTest } from "../../extensions/deepseek-cost/chatgpt-usage";
 
 type EventHandler = (event: unknown, ctx: unknown) => unknown;
 type CommandHandler = (args: string, ctx: unknown) => unknown;
@@ -24,11 +25,101 @@ function mountExtension() {
   return { commands, handlers };
 }
 
+function installFakeCodexModules(overrides: {
+  fetchUsage?: () => Promise<unknown>;
+  parseRateLimitHeaders?: (headers: Record<string, string>, now?: number) => unknown;
+} = {}) {
+  __setOmpModuleLoaderForTest(async () => ({
+    openaiCodexUsageProvider: {
+      fetchUsage: overrides.fetchUsage ?? (async () => null),
+    },
+    parseCodexRateLimitHeaders: overrides.parseRateLimitHeaders ?? (() => null),
+    wrapFetchForProxy: (fetchImpl: unknown) => fetchImpl,
+    getProxyForProvider: () => process.env.PI_PROXY_OPENAI_CODEX || process.env.PI_PROXY,
+  }));
+}
+
+function codexContext(overrides: {
+  accounts?: Array<{ position: number; accountId?: string; email?: string }>;
+  access?: { ok: true; accessToken: string; accountId?: string; email?: string } | { ok: false; error: string };
+} = {}) {
+  const widgetCalls: Array<string[] | undefined> = [];
+  const widgetContents: Array<unknown> = [];
+  const notifyCalls: Array<{ message: string; type?: string }> = [];
+  const authStorage = {
+    listOAuthAccounts: () => overrides.accounts ?? [{ position: 0, accountId: "acct-1", email: "u@example.com" }],
+    getOAuthAccessAt: async () => overrides.access ?? { ok: true, accessToken: "token-1", accountId: "acct-1", email: "u@example.com" },
+    fetchUsageReports: async () => { throw new Error("aggregate usage must not be called"); },
+  };
+  const ctx = {
+    hasUI: true,
+    model: { id: "gpt-5.4", provider: "openai-codex" },
+    sessionManager: {
+      getSessionId: () => "s1",
+      getSessionName: () => "test",
+      getUsageStatistics: () => ({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        orchestrationInput: 0,
+        orchestrationCacheRead: 0,
+        orchestrationOutput: 0,
+        totalTokens: 0,
+      }),
+    },
+    modelRegistry: { authStorage },
+    getContextUsage: () => ({ tokens: 136_000 }),
+    ui: {
+      theme: { fg: (_color: string, text: string) => text },
+      setWidget: (_key: string, content: unknown) => {
+        widgetContents.push(content);
+        if (typeof content === "function") {
+          const component = (content as (tui: unknown, theme: { fg: (color: string, text: string) => string }) => { render(width: number): string[] })(
+            {},
+            { fg: (_color: string, text: string) => text },
+          );
+          widgetCalls.push(component.render(120));
+        } else {
+          widgetCalls.push(content as string[] | undefined);
+        }
+      },
+      notify(message: string, type?: string) {
+        notifyCalls.push({ message, type });
+      },
+    },
+    cwd: "C:/tmp",
+    setTimeout: () => 1,
+    clearTimer() {},
+  };
+  return { ctx, notifyCalls, widgetCalls, widgetContents };
+}
+
+function weeklyReport(usedPercent = 34, resetsAt = Date.now() + 24 * 60 * 60 * 1000) {
+  return {
+    provider: "openai-codex",
+    fetchedAt: 123,
+    limits: [{
+      id: "openai-codex:primary",
+      scope: { accountId: "acct-1", windowId: "7d" },
+      window: { id: "7d", durationMs: 7 * 24 * 60 * 60 * 1000, resetsAt },
+      amount: { used: usedPercent, limit: 100, usedFraction: usedPercent / 100, unit: "percent" },
+    }],
+  };
+}
+
+afterEach(() => {
+  __setOmpModuleLoaderForTest(null);
+  delete process.env.PI_PROXY_OPENAI_CODEX;
+  delete process.env.PI_PROXY;
+});
+
 function extensionContext(
   tokens: number,
   model = { id: "gpt-5.4", provider: "openai-codex" },
 ) {
   const widgetCalls: Array<string[] | undefined> = [];
+  const widgetContents: Array<unknown> = [];
   const notifyCalls: Array<{ message: string; type?: string }> = [];
   const ctx = {
     hasUI: true,
@@ -48,19 +139,41 @@ function extensionContext(
     getContextUsage: () => ({ tokens }),
     ui: {
       theme: { fg: (_color: string, text: string) => text },
-      setWidget: (_key: string, lines: string[] | undefined) => widgetCalls.push(lines),
+      setWidget: (_key: string, content: unknown) => {
+        widgetContents.push(content);
+        if (typeof content === "function") {
+          const component = (content as (tui: unknown, theme: { fg: (color: string, text: string) => string }) => { render(width: number): string[] })(
+            {},
+            { fg: (_color: string, text: string) => text },
+          );
+          widgetCalls.push(component.render(120));
+        } else {
+          widgetCalls.push(content as string[] | undefined);
+        }
+      },
       notify(message: string, type?: string) {
         notifyCalls.push({ message, type });
       },
     },
   };
-  return { ctx, notifyCalls, widgetCalls };
+  return { ctx, notifyCalls, widgetCalls, widgetContents };
 }
 
 function fire(handlers: Map<string, EventHandler>, event: string, ctx: unknown): unknown {
   const handler = handlers.get(event);
   if (!handler) throw new Error(`handler not registered: ${event}`);
   return handler({}, ctx);
+}
+
+function fireWithPayload(
+  handlers: Map<string, EventHandler>,
+  event: string,
+  payload: unknown,
+  ctx: unknown,
+): unknown {
+  const handler = handlers.get(event);
+  if (!handler) throw new Error(`handler not registered: ${event}`);
+  return handler(payload, ctx);
 }
 
 function runCommand(
@@ -72,6 +185,19 @@ function runCommand(
   const handler = commands.get(name);
   if (!handler) throw new Error(`command not registered: ${name}`);
   return handler(args, ctx);
+}
+
+function renderLastWidget(
+  widgetContents: unknown[],
+  width: number,
+  theme: { fg: (color: string, text: string) => string } = { fg: (_color, text) => text },
+): string[] {
+  const content = widgetContents[widgetContents.length - 1];
+  if (typeof content !== "function") throw new Error("last widget content is not a component factory");
+  const factory = content as (tui: unknown, theme: { fg: (color: string, text: string) => string }) => {
+    render(width: number): string[];
+  };
+  return factory({}, theme).render(width);
 }
 
 async function withTemporaryHome<T>(run: () => T | Promise<T>): Promise<T> {
@@ -241,55 +367,257 @@ describe("deepseek-cost extension", () => {
   });
 
   test("ChatGPT session start shows weekly usage and reset time", async () => {
+    process.env.PI_PROXY = "http://generic-proxy";
+    installFakeCodexModules({ fetchUsage: async () => weeklyReport(34) });
     const { handlers } = mountExtension();
-    const widgetCalls: Array<string[] | undefined> = [];
-    const now = Date.now();
-    const ctx = {
-      hasUI: true,
-      model: { id: "gpt-5.4", provider: "openai-codex" },
-      sessionManager: {
-        getSessionId: () => "s1",
-        getSessionName: () => "test",
-        getUsageStatistics: () => ({
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          orchestrationInput: 0,
-          orchestrationCacheRead: 0,
-          orchestrationOutput: 0,
-          totalTokens: 0,
-        }),
-      },
-      modelRegistry: {
-        authStorage: {
-          getOAuthAccountIdentity: () => ({ accountId: "acct-1" }),
-          fetchUsageReports: async () => [{
-            provider: "openai-codex",
-            fetchedAt: now,
-            limits: [{
-              scope: { accountId: "acct-1", windowId: "7d" },
-              window: { id: "7d", resetsAt: now + 2 * 24 * 60 * 60 * 1000 },
-              amount: { usedFraction: 0.34 },
-            }],
-          }],
-        },
-      },
-      getContextUsage: () => ({ tokens: 136_000 }),
-      ui: {
-        theme: { fg: (_color: string, text: string) => text },
-        setWidget: (_key: string, lines: string[] | undefined) => widgetCalls.push(lines),
-        notify() {},
-      },
-      cwd: "C:/tmp",
-      setTimeout: () => 1,
-      clearTimer() {},
-    };
+    const { ctx, widgetCalls } = codexContext();
 
     await fire(handlers, "session_start", ctx);
 
     const last = widgetCalls[widgetCalls.length - 1]?.[0] ?? "";
-    expect(last).toContain("7d 34%");
-    expect(last).toContain("重置");
+    expect(last).toContain("34.0%");
+    expect(last).toContain("resets in");
+  });
+});
+
+describe("deepseek-cost Codex usage lifecycle", () => {
+  test("session_start starts one refresh and renders loading first", async () => {
+    let calls = 0;
+    installFakeCodexModules({
+      fetchUsage: async () => {
+        calls += 1;
+        return weeklyReport();
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const { handlers } = mountExtension();
+    const { ctx, widgetCalls } = codexContext();
+
+    await fire(handlers, "session_start", ctx);
+
+    expect(calls).toBe(1);
+    expect(widgetCalls.some(lines => lines?.[0]?.includes("正在获取"))).toBe(true);
+    const last = widgetCalls[widgetCalls.length - 1]?.[0] ?? "";
+    expect(last).toContain("34.0%");
+  });
+
+  test("agent_start issues no active usage request", async () => {
+    let calls = 0;
+    installFakeCodexModules({
+      fetchUsage: async () => {
+        calls += 1;
+        return weeklyReport();
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const { handlers } = mountExtension();
+    const { ctx } = codexContext();
+
+    fire(handlers, "agent_start", ctx);
+
+    expect(calls).toBe(0);
+  });
+
+  test("agent_end starts one refresh per completed turn", async () => {
+    let calls = 0;
+    installFakeCodexModules({
+      fetchUsage: async () => {
+        calls += 1;
+        return weeklyReport();
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const { handlers } = mountExtension();
+    const { ctx } = codexContext();
+
+    await fire(handlers, "session_start", ctx);
+    await fire(handlers, "agent_end", ctx);
+
+    expect(calls).toBe(2);
+  });
+
+  test("overlapping triggers share one in-flight request without trailing call", async () => {
+    let calls = 0;
+    const { promise: pending, resolve: resolveFetch } = Promise.withResolvers<unknown>();
+    installFakeCodexModules({
+      fetchUsage: () => {
+        calls += 1;
+        return pending;
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const { handlers } = mountExtension();
+    const { ctx } = codexContext();
+
+    const sessionStart = fire(handlers, "session_start", ctx);
+    const agentEnd = fire(handlers, "agent_end", ctx);
+    resolveFetch(weeklyReport());
+    await sessionStart;
+    await agentEnd;
+
+    expect(calls).toBe(1);
+  });
+
+  test("active failure clears API data but preserves header data", async () => {
+    let fail = false;
+    installFakeCodexModules({
+      fetchUsage: async () => (fail ? null : weeklyReport(34)),
+      parseRateLimitHeaders: (headers: Record<string, string>, now = Date.now()) => {
+        const usedPercent = Number(headers["x-codex-primary-used-percent"]);
+        if (!Number.isFinite(usedPercent)) return null;
+        return {
+          provider: "openai-codex",
+          fetchedAt: now,
+          limits: [{
+            id: "openai-codex:primary",
+            scope: { accountId: "acct-1", windowId: "7d" },
+            window: { id: "7d", durationMs: 7 * 24 * 60 * 60 * 1000, resetsAt: 1_800_000_000_000 },
+            amount: { used: usedPercent, limit: 100, usedFraction: usedPercent / 100, unit: "percent" },
+          }],
+        };
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const { handlers } = mountExtension();
+    const { ctx, widgetCalls } = codexContext();
+
+    await fire(handlers, "session_start", ctx);
+    fireWithPayload(
+      handlers,
+      "after_provider_response",
+      { headers: { "x-codex-primary-used-percent": "50", "x-codex-primary-window-minutes": "10080" } },
+      ctx,
+    );
+    fail = true;
+    await fire(handlers, "agent_end", ctx);
+
+    const last = widgetCalls[widgetCalls.length - 1]?.[0] ?? "";
+    expect(last).toContain("50.0%");
+    expect(last).toContain("usage request failed");
+  });
+
+  test("missing proxy renders config error without notification", async () => {
+    installFakeCodexModules({});
+    const { handlers } = mountExtension();
+    const { ctx, notifyCalls, widgetCalls } = codexContext();
+
+    await fire(handlers, "session_start", ctx);
+
+    const last = widgetCalls[widgetCalls.length - 1]?.[0] ?? "";
+    expect(last).toContain("PI_PROXY_OPENAI_CODEX");
+    expect(notifyCalls.length).toBe(0);
+  });
+
+  test("incompatible OMP version renders in widget and keeps extension mounted", async () => {
+    __setOmpModuleLoaderForTest(async () => {
+      throw new Error("Cannot find package");
+    });
+    const { handlers } = mountExtension();
+    const { ctx, widgetCalls } = codexContext();
+
+    await fire(handlers, "session_start", ctx);
+
+    expect(widgetCalls.some(lines => lines?.[0]?.includes("incompatible OMP version"))).toBe(true);
+  });
+
+  test("successful refresh clears prior transport error", async () => {
+    let fail = true;
+    installFakeCodexModules({
+      fetchUsage: async () => (fail ? null : weeklyReport(34)),
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const { handlers } = mountExtension();
+    const { ctx, widgetCalls } = codexContext();
+
+    await fire(handlers, "session_start", ctx);
+    fail = false;
+    await fire(handlers, "agent_end", ctx);
+
+    const last = widgetCalls[widgetCalls.length - 1]?.[0] ?? "";
+    expect(last).toContain("34.0%");
+    expect(last).not.toContain("usage request failed");
+  });
+});
+
+describe("deepseek-cost weekly pacing widget", () => {
+  test("renders combined pacing bar through the component factory", async () => {
+    process.env.PI_PROXY = "http://generic-proxy";
+    installFakeCodexModules({ fetchUsage: async () => weeklyReport(60) });
+    const { handlers } = mountExtension();
+    const { ctx, widgetContents } = codexContext();
+
+    await fire(handlers, "session_start", ctx);
+
+    const lines = renderLastWidget(widgetContents, 120);
+    expect(lines[0]).toContain("━");
+    expect(lines[0]).toContain("60.0% /");
+    expect(lines.some(line => line.includes("Total:"))).toBe(true);
+  });
+
+  test("applies semantic status color only to heavy quota glyphs and quota number", async () => {
+    const WEEK = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    process.env.PI_PROXY = "http://generic-proxy";
+    installFakeCodexModules({
+      fetchUsage: async () => weeklyReport(40, now + WEEK * 0.7),
+    });
+    const { handlers } = mountExtension();
+    const { ctx, widgetContents } = codexContext();
+    const theme = { fg: (color: string, text: string) => `[${color}]${text}[/${color}]` };
+
+    await fire(handlers, "session_start", ctx);
+
+    const lines = renderLastWidget(widgetContents, 200, theme);
+    expect(lines[0]).toContain("[success]━[/success]");
+    expect(lines[0]).toContain("[success]40.0[/success]%");
+    expect(lines[0]).not.toContain("[success]│[/success]");
+    expect(lines[0]).not.toContain("[success]─[/success]");
+  });
+
+  test("drops the bar before precise percentages on narrow widths", async () => {
+    process.env.PI_PROXY = "http://generic-proxy";
+    installFakeCodexModules({ fetchUsage: async () => weeklyReport(60) });
+    const { handlers } = mountExtension();
+    const { ctx, widgetContents } = codexContext();
+
+    await fire(handlers, "session_start", ctx);
+
+    const wide = renderLastWidget(widgetContents, 120);
+    expect(wide[0]).toContain("━");
+
+    const narrow = renderLastWidget(widgetContents, 70);
+    expect(narrow[0]).not.toContain("━");
+    expect(narrow[0]).toContain("60.0% /");
+    expect(narrow.length).toBe(wide.length);
+  });
+
+  test("existing redraw observes a later controlled time without a new usage request", async () => {
+    const WEEK = 7 * 24 * 60 * 60 * 1000;
+    const fakeNow = 1_800_000_000_000;
+    let calls = 0;
+    process.env.PI_PROXY = "http://generic-proxy";
+    installFakeCodexModules({
+      fetchUsage: async () => {
+        calls += 1;
+        return weeklyReport(10, fakeNow + WEEK);
+      },
+    });
+    const { handlers } = mountExtension();
+    const { ctx, widgetContents } = codexContext();
+    const originalNow = Date.now;
+    Date.now = () => fakeNow;
+    try {
+      await fire(handlers, "session_start", ctx);
+      const first = renderLastWidget(widgetContents, 120);
+      expect(first[0]).toContain("10.0% / 0.0%");
+
+      Date.now = () => fakeNow + WEEK * 0.5;
+      fire(handlers, "agent_start", ctx);
+      const second = renderLastWidget(widgetContents, 120);
+      expect(second[0]).toContain("10.0% / 50.0%");
+      expect(calls).toBe(1);
+    } finally {
+      Date.now = originalNow;
+    }
   });
 });

@@ -26,7 +26,7 @@
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
-import { createTrackerState, DEFAULT_DEEPSEEK_BUDGET, type TrackerState } from "./tracker-state";
+import { createTrackerState, DEFAULT_DEEPSEEK_BUDGET, type ChatGPTUsageState, type TrackerState } from "./tracker-state";
 import {
   priceForModel,
   resolvePriceTier,
@@ -42,7 +42,7 @@ import {
 import { createDailyTracker, type DailyTracker } from "./daily-tracker";
 import { anchorRequest, addMessageCost, finishTurn } from "./turn-cost";
 import { buildSegmentBar } from "./segment-bar";
-import { fetchChatGPTUsage, isOpenAICodexModel, buildWeeklyUsagePart, parseChatGPTUsageHeaders } from "./chatgpt-usage";
+import { fetchChatGPTUsage, isOpenAICodexModel, buildWeeklyUsagePart, parseChatGPTUsageHeaders, visibleDisplayWidth } from "./chatgpt-usage";
 
 // ============================================================================
 // Constants
@@ -122,6 +122,56 @@ function colorBar(bar: string, tokens: number, max: number, theme: { fg: (color:
   return theme.fg(barColor(pct), bar);
 }
 
+function buildChatGPTWidgetLines(
+  state: TrackerState,
+  ctx: ExtensionContext,
+  theme: { fg: (color: string, text: string) => string },
+  width: number,
+): string[] {
+  const stats = ctx.sessionManager.getUsageStatistics();
+  const cu = ctx.getContextUsage();
+  state.lastContextTokens = cu?.tokens ?? state.lastContextTokens;
+  const budget = CHATGPT_BUDGET;
+  const bar = buildBar(state.lastContextTokens, budget);
+
+  const parts: string[] = [];
+  let prefixWidth = 0;
+  if (bar && state.lastContextTokens !== null) {
+    const coloredBar = colorBar(bar, state.lastContextTokens, budget, theme);
+    parts.push(coloredBar);
+    prefixWidth = visibleDisplayWidth(coloredBar);
+  }
+  const weeklyWidth = Math.max(0, width - (parts.length > 0 ? prefixWidth + 2 : 0));
+  const weekly = buildWeeklyUsagePart(state.chatgpt, Date.now(), weeklyWidth, theme);
+  if (weekly) parts.push(weekly);
+
+  const lines: string[] = [];
+  if (parts.length > 0) lines.push(parts.join("  "));
+
+  const cost = ctx.model?.cost as ModelCost | undefined;
+  const totalUsage = {
+    input: stats.input,
+    cacheRead: stats.cacheRead,
+    cacheWrite: stats.cacheWrite,
+    output: stats.output,
+    orchestrationInput: stats.orchestrationInput,
+    orchestrationCacheRead: stats.orchestrationCacheRead,
+    orchestrationOutput: stats.orchestrationOutput,
+  };
+  if (cost) {
+    lines.push(`\u{1F4CB} Total:  ${buildChatGPTStatusLine(totalUsage, cost, true, state.detailMode, stats.totalTokens)}`);
+    if (state.turnDelta) {
+      lines.push(`\u{1F4CA} Turn:   ${buildChatGPTStatusLine(state.turnDelta, cost, true, state.detailMode)}`);
+    }
+  } else {
+    lines.push(`\u{1F4CB} Total:  ${buildChatGPTTokenLine(totalUsage, true, state.detailMode, stats.totalTokens)}`);
+    if (state.turnDelta) {
+      lines.push(`\u{1F4CA} Turn:   ${buildChatGPTTokenLine(state.turnDelta, true, state.detailMode)}`);
+    }
+  }
+  return lines;
+}
+
 // ============================================================================
 // Balance fetching
 // ============================================================================
@@ -176,39 +226,11 @@ function refresh(
   const bar = buildBar(state.lastContextTokens, budget);
 
   if (isChatGPT) {
-    // Line 1: context progress bar + weekly usage on the same line.
-    const parts: string[] = [];
-    if (bar && state.lastContextTokens !== null) {
-      parts.push(colorBar(bar, state.lastContextTokens, budget, ctx.ui.theme));
-    }
-    const weekly = buildWeeklyUsagePart(state.chatgpt);
-    if (weekly) parts.push(weekly);
-    if (parts.length > 0) lines.push(parts.join("  "));
-
-    // Line 2/3: total and turn token stats. Cost/ratio only when model cost exists.
-    const cost = ctx.model?.cost as ModelCost | undefined;
-    const totalUsage = {
-      input: stats.input,
-      cacheRead: stats.cacheRead,
-      cacheWrite: stats.cacheWrite,
-      output: stats.output,
-      orchestrationInput: stats.orchestrationInput,
-      orchestrationCacheRead: stats.orchestrationCacheRead,
-      orchestrationOutput: stats.orchestrationOutput,
-    };
-    if (cost) {
-      lines.push(`\u{1F4CB} Total:  ${buildChatGPTStatusLine(totalUsage, cost, true, state.detailMode, stats.totalTokens)}`);
-      if (state.turnDelta) {
-        lines.push(`\u{1F4CA} Turn:   ${buildChatGPTStatusLine(state.turnDelta, cost, true, state.detailMode)}`);
-      }
-    } else {
-      lines.push(`\u{1F4CB} Total:  ${buildChatGPTTokenLine(totalUsage, true, state.detailMode, stats.totalTokens)}`);
-      if (state.turnDelta) {
-        lines.push(`\u{1F4CA} Turn:   ${buildChatGPTTokenLine(state.turnDelta, true, state.detailMode)}`);
-      }
-    }
-
-    ctx.ui.setWidget(WIDGET_KEY, lines);
+    ctx.ui.setWidget(WIDGET_KEY, (_tui: unknown, theme: { fg: (color: string, text: string) => string }) => ({
+      render(width: number) {
+        return buildChatGPTWidgetLines(state, ctx, theme, width);
+      },
+    }));
     return;
   }
 
@@ -264,6 +286,48 @@ export default function deepseekCost(pi: ExtensionAPI): void {
   const state = createTrackerState();
   const daily = createDailyTracker();
   let boundaryTimer: Timer | undefined;
+  let chatgptUsagePromise: Promise<ChatGPTUsageState> | null = null;
+
+  function applyChatGPTUsageResult(ctx: ExtensionContext, result: ChatGPTUsageState): void {
+    const current = state.chatgpt;
+    if (
+      result.kind === "config" ||
+      result.kind === "auth" ||
+      result.kind === "transport" ||
+      result.kind === "incompatible"
+    ) {
+      if (current.source === "header") {
+        state.chatgpt = { ...current, error: result.error ?? null };
+      } else {
+        state.chatgpt = result;
+      }
+    } else {
+      state.chatgpt = result;
+    }
+    refresh(state, daily, pi, ctx);
+  }
+
+  function refreshChatGPTUsage(ctx: ExtensionContext): Promise<ChatGPTUsageState> {
+    if (!chatgptUsagePromise) {
+      chatgptUsagePromise = fetchChatGPTUsage(ctx)
+        .then(result => {
+          applyChatGPTUsageResult(ctx, result);
+          return result;
+        })
+        .finally(() => {
+          chatgptUsagePromise = null;
+        });
+    }
+    return chatgptUsagePromise;
+  }
+
+  function startChatGPTUsageRefresh(ctx: ExtensionContext): Promise<ChatGPTUsageState> {
+    if (state.chatgpt.kind === "idle" || state.chatgpt.kind === "loading") {
+      state.chatgpt = { kind: "loading", usedPercent: null, resetsAt: null, fetchedAt: null };
+      refresh(state, daily, pi, ctx);
+    }
+    return refreshChatGPTUsage(ctx);
+  }
 
   function scheduleBoundaryRefresh(ctx: ExtensionContext): void {
     if (boundaryTimer) ctx.clearTimer(boundaryTimer);
@@ -348,7 +412,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
     state.lastContextTokens = null;
     state.turnDelta = null;
     state.balance = null;
-    state.chatgpt = { usedPercent: null, resetsAt: null, fetchedAt: null };
+    state.chatgpt = { kind: "idle", usedPercent: null, resetsAt: null, fetchedAt: null };
     finishTurn(state.turnCost);
 
     const sessionId = ctx.sessionManager.getSessionId();
@@ -361,8 +425,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 
     refresh(state, daily, pi, ctx);
     if (isOpenAICodexModel(ctx.model)) {
-      const usage = await fetchChatGPTUsage(ctx);
-      if (usage) state.chatgpt = usage;
+      await startChatGPTUsageRefresh(ctx);
     } else {
       state.balance = await fetchBalance(ctx);
     }
@@ -375,23 +438,19 @@ export default function deepseekCost(pi: ExtensionAPI): void {
   pi.on("session_switch", onInit);
   pi.on("session_tree", onInit);
 
-  // ── Agent start — refresh context bar, and fetch weekly usage if missing ──
+  // ── Agent start — refresh rendering only; no active usage request ──
   pi.on("agent_start", (_event, ctx) => {
     refresh(state, daily, pi, ctx);
-    if (isOpenAICodexModel(ctx.model) && state.chatgpt.fetchedAt === null) {
-      void fetchChatGPTUsage(ctx).then(usage => {
-        if (usage) state.chatgpt = usage;
-        refresh(state, daily, pi, ctx);
-      });
-    }
   });
 
   // ── Provider response — absorb Codex weekly usage headers ──
-  pi.on("after_provider_response", (event, ctx) => {
+  pi.on("after_provider_response", async (event, ctx) => {
     if (!isOpenAICodexModel(ctx.model)) return;
-    const headerUsage = parseChatGPTUsageHeaders(event.headers);
-    if (headerUsage) state.chatgpt = headerUsage;
-    refresh(state, daily, pi, ctx);
+    const headerUsage = await parseChatGPTUsageHeaders(event.headers);
+    if (headerUsage) {
+      state.chatgpt = { ...headerUsage, error: state.chatgpt.error ?? null };
+      refresh(state, daily, pi, ctx);
+    }
   });
 
   // ── Provider request — anchor price tier for the request being sent ──
@@ -448,9 +507,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
       state.previousTotal = cur;
       finishTurn(state.turnCost);
 
-      const usage = await fetchChatGPTUsage(ctx);
-      if (usage) state.chatgpt = usage;
-      refresh(state, daily, pi, ctx);
+      await refreshChatGPTUsage(ctx);
       return;
     }
 

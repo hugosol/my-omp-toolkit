@@ -10,7 +10,7 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 - **每日花费追踪** — 按 session 分组统计，数据持久化到 `~/.omp/cost-archive/deepseek-cost.json`
 - **分段进度条** — 可视化每个 session 的费用占比，支持精细模式（≤ ¥20）和粗模式（> ¥20）
 - **余额查询** — 自动查询 DeepSeek 账户余额
-- **ChatGPT/Codex 周额度** — 当当前模型为 `openai-codex` OAuth 模型时，显示 7 天周限额百分比、重置倒计时和绝对时间
+- **ChatGPT/Codex 周额度节奏条** — 当当前模型为 `openai-codex` OAuth 模型时，用 20 格单轴进度条同时编码已用额度和七天周期时间进度，显示 `quota% / time%`、重置倒计时和绝对时间
 - **ChatGPT/Codex 费用** — 使用 OMP catalog 中的动态 USD 价格计算 CacheRead/In/CacheWrite/Out 四路比例、Total/Turn 估计费用；不显示 DeepSeek 余额和每日累计
 
 ## 定价
@@ -32,11 +32,16 @@ DeepSeek 费用分支仅识别以上两个模型 ID；其他非 ChatGPT/Codex �
 
 当当前模型 provider 为 `openai-codex` 时，扩展切换到 ChatGPT/Codex 模式：
 
-- 显示固定 272K 预算的上下文进度条 + 7 天周限额（`7d N%`、重置倒计时和绝对时间）。
+- 显示固定 272K 预算的上下文进度条 + 7 天周额度节奏条（`7d` 后跟 20 格单轴进度条：`━` 已用额度、`─` 未用额度、`│` 当前七天周期时间位置，以及 `quota% / time%`、重置倒计时和绝对时间）。
 - Total/Turn 显示输入缓存命中率、`CacheRead/In/CacheWrite/Out` 四路费用比例、`Sum`（含 orchestration）和 USD 估计费用。
 - 费用动态读取 `ctx.model.cost`（USD / 百万 tokens），不硬编码；模型缺少 cost 时隐藏费用相关列。
 - 不显示 DeepSeek 余额、每日累计花费和分段条。
-- 周额度数据复用 `AuthStorage.fetchUsageReports()`，并通过 `after_provider_response` 吸收 `x-codex-secondary-*` 响应头实现准实时刷新。
+- 周额度数据通过 OMP 公开的 `openaiCodexUsageProvider.fetchUsage` 获取，并在扩展内使用 `PI_PROXY_OPENAI_CODEX`（缺失时回退 `PI_PROXY`）建立 request-scoped 代理；不修改进程全局 `HTTPS_PROXY`。
+- 通过 `after_provider_response` 复用 OMP 公开的 Codex rate-limit header parser，并和主动用量接口共用同一套“按报告时长识别 7 天窗口”的选择规则（primary/secondary 均可）。
+- 首次加载显示 `7d … · 正在获取`；代理缺失、认证失败、传输失败、OMP 版本不兼容都只在 widget 内展示错误摘要，不弹通知。
+- 主动用量刷新为 single-flight：`session_start` 发起首次刷新，每个 Codex `agent_end` 刷新一次，`agent_start` 不发起用量请求；重叠触发共享同一个 in-flight 请求。
+
+周额度节奏条使用固定七天模型：周期起点为报告重置时间减去恰好 7 天，`time%` 由当前渲染时刻计算。额度相对时间的超前百分点决定粗线和额度数字的语义颜色：落后或持平用 `text`，0–15 个百分点用 `success`，15–30 用 `warning`，超过 30 用 `error`；无法取得有效重置时间时整条额度使用 `muted` 并显示 `quota% / --`。时间未知、已过期、超过七天无效分别显示 `reset unknown`、`reset expired (<local>)`、`reset invalid (<local>)`。窄终端按顺序移除 20 格条、绝对重置时间、重置倒计时，最后保留 `7d quota% / time%`，仍放不下时才做 ANSI-aware 右截断；整段始终单行。渲染不新增定时器、不发起额外额度请求。
 
 进度条预算只是显示和颜色告警使用的分母，不会限制模型请求、修改输出上限或触发上下文压缩。扩展有意不采用模型目录或 `getContextUsage()` 返回的动态 `contextWindow`。
 
@@ -78,7 +83,7 @@ cost-calc.ts       纯函数：DeepSeek 价格解析、ChatGPT USD 费用、toke
 turn-cost.ts       单回合 per-request 费用累计器（DeepSeek）
 daily-tracker.ts   每日持久化：JSON 读写、归档、session 追踪（DeepSeek）
 segment-bar.ts     分段进度条渲染：fine / coarse 双模式（DeepSeek）
-chatgpt-usage.ts   ChatGPT/Codex 周额度获取、响应头解析、重置时间格式化
+chatgpt-usage.ts   ChatGPT/Codex 周额度 scoped proxy 获取、响应头解析、窗口选择、节奏条/重置/错误渲染
 ```
 
 ## 技术细节

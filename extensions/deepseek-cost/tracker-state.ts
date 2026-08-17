@@ -28,14 +28,30 @@ export interface TurnDelta {
   orchestrationOutput: number;
 }
 
+/** Distinct ChatGPT/Codex usage widget states. */
+export type ChatGPTUsageKind =
+  | "idle"
+  | "loading"
+  | "ok"
+  | "missing"
+  | "incompatible"
+  | "config"
+  | "auth"
+  | "transport";
+
 /** ChatGPT/Codex weekly usage snapshot for the active OAuth account. */
 export interface ChatGPTUsageState {
+  kind: ChatGPTUsageKind;
   /** Weekly used percent from the 7d window, 0–100. */
   usedPercent: number | null;
   /** Absolute reset timestamp in epoch ms, when known. */
   resetsAt: number | null;
   /** Epoch ms when this snapshot was fetched/observed. */
   fetchedAt: number | null;
+  /** Which successful source produced the data, when data is present. */
+  source?: "api" | "header";
+  /** Displayable error/status detail for config, auth, transport, incompatible. */
+  error?: string | null;
 }
 
 export interface TrackerState {
@@ -69,6 +85,6 @@ export function createTrackerState(): TrackerState {
     balance: null,
     detailMode: false,
     turnCost: createTurnCostState(),
-    chatgpt: { usedPercent: null, resetsAt: null, fetchedAt: null },
+    chatgpt: { kind: "idle", usedPercent: null, resetsAt: null, fetchedAt: null },
   };
 }
