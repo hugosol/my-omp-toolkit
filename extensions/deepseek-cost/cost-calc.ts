@@ -166,3 +166,178 @@ export function buildStatusLine(
   }
   return `Cache: ${hitRate}%  ${cacheInOutRatio(usage, tier)}  Sum: ${fmtTokens(sum)}  Cost: ${fmtCost(cost)}`;
 }
+
+// ============================================================================
+// ChatGPT/Codex cost helpers (USD pricing from ctx.model.cost)
+// ============================================================================
+
+/** Per-million-token USD cost for a model (shape matches ctx.model.cost). */
+export interface ModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/** Usage shape accepted by ChatGPT/Codex cost helpers. */
+export interface ChatGPTUsage {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+  orchestrationInput?: number;
+  orchestrationCacheRead?: number;
+  orchestrationOutput?: number;
+  reasoningTokens?: number;
+}
+
+/** Calculate estimated USD cost from token counts and per-million USD rates. */
+export function usdCost(usage: ChatGPTUsage, cost: ModelCost): number {
+  return (
+    (usage.input * cost.input +
+      usage.cacheRead * cost.cacheRead +
+      usage.cacheWrite * cost.cacheWrite +
+      usage.output * cost.output +
+      (usage.orchestrationInput ?? 0) * cost.input +
+      (usage.orchestrationCacheRead ?? 0) * cost.cacheRead +
+      (usage.orchestrationOutput ?? 0) * cost.output) /
+    1_000_000
+  );
+}
+
+/** Format a USD cost value ($2 decimals when ≥0.01, else $4 decimals). */
+export function fmtUsd(cost: number): string {
+  return cost >= 0.01 ? `$${cost.toFixed(2)}` : `$${cost.toFixed(4)}`;
+}
+
+/** Build a four-way cost ratio string: cache read / input / cache write / output. */
+export function cacheInOutWriteRatio(usage: ChatGPTUsage, cost: ModelCost): string {
+  const cacheCost = usdCost({ input: 0, cacheRead: usage.cacheRead, cacheWrite: 0, output: 0 }, cost);
+  const inCost = usdCost({ input: usage.input, cacheRead: 0, cacheWrite: 0, output: 0 }, cost);
+  const writeCost = usdCost({ input: 0, cacheRead: 0, cacheWrite: usage.cacheWrite, output: 0 }, cost);
+  const outCost = usdCost({ input: 0, cacheRead: 0, cacheWrite: 0, output: usage.output }, cost);
+  const total = cacheCost + inCost + writeCost + outCost;
+  if (total <= 0) return `\u0024CacheRead/In/CacheWrite/Out：--:--:--:--`;
+
+  const raws = [cacheCost, inCost, writeCost, outCost].map(c => (c / total) * 100);
+  const floors = raws.map(c => Math.floor(c));
+  let remaining = 100 - floors.reduce((sum, n) => sum + n, 0);
+  const order = [0, 1, 2, 3].sort((a, b) => {
+    const diff = (raws[b] - floors[b]) - (raws[a] - floors[a]);
+    return diff !== 0 ? diff : a - b;
+  });
+  const pcts = [...floors];
+  for (const idx of order) {
+    if (remaining <= 0) break;
+    pcts[idx] += 1;
+    remaining -= 1;
+  }
+  return `\u0024CacheRead/In/CacheWrite/Out：${pcts[0]}:${pcts[1]}:${pcts[2]}:${pcts[3]}`;
+}
+
+function padUsd(cost: number): string {
+  return fmtUsd(cost).padStart(PAD_COST);
+}
+
+/** Build a single-line status string for ChatGPT/Codex usage using USD model costs. */
+export function buildChatGPTStatusLine(
+  usage: ChatGPTUsage,
+  cost: ModelCost,
+  pad: boolean,
+  detailMode: boolean,
+  totalTokens?: number,
+): string {
+  const totalIn = usage.input + usage.cacheRead;
+  const sum = totalTokens ?? usage.input + usage.cacheRead + usage.cacheWrite + usage.output
+    + (usage.orchestrationInput ?? 0) + (usage.orchestrationCacheRead ?? 0) + (usage.orchestrationOutput ?? 0);
+  const hitRate = totalIn > 0 ? Math.round((usage.cacheRead / totalIn) * 100) : 0;
+  const costVal = usdCost(usage, cost);
+  const ratio = cacheInOutWriteRatio(usage, cost);
+
+  if (pad) {
+    if (detailMode) {
+      const pct = String(hitRate).padStart(3);
+      let line = `Input: ${padTokens(usage.cacheRead, PAD_IN)}/${padTokens(totalIn, PAD_IN)} (${pct}%)  Output: ${padTokens(usage.output, PAD_OUT)}`;
+      if (usage.cacheWrite > 0) line += `  Write: ${padTokens(usage.cacheWrite, PAD_OUT)}`;
+      line += `  ${ratio}  Sum: ${padSum(sum)}  Cost: ${padUsd(costVal)}`;
+      if (usage.reasoningTokens !== undefined && usage.reasoningTokens > 0) {
+        line += `  Reasoning: ${padTokens(usage.reasoningTokens, PAD_OUT)}`;
+      }
+      const orchInput = usage.orchestrationInput ?? 0;
+      const orchCacheRead = usage.orchestrationCacheRead ?? 0;
+      const orchOutput = usage.orchestrationOutput ?? 0;
+      if (orchInput + orchCacheRead + orchOutput > 0) {
+        line += `  Orch: ${fmtTokens(orchInput)}/${fmtTokens(orchCacheRead)}/${fmtTokens(orchOutput)}`;
+      }
+      return line;
+    }
+    return `Cache: ${String(hitRate).padStart(3)}%  ${ratio}  Sum: ${padSum(sum)}  Cost: ${padUsd(costVal)}`;
+  }
+
+  if (detailMode) {
+    let line = `Input: ${fmtTokens(usage.cacheRead)}/${fmtTokens(totalIn)} (${hitRate}%)  Output: ${fmtTokens(usage.output)}`;
+    if (usage.cacheWrite > 0) line += `  Write: ${fmtTokens(usage.cacheWrite)}`;
+    line += `  ${ratio}  Sum: ${fmtTokens(sum)}  Cost: ${fmtUsd(costVal)}`;
+    if (usage.reasoningTokens !== undefined && usage.reasoningTokens > 0) {
+      line += `  Reasoning: ${fmtTokens(usage.reasoningTokens)}`;
+    }
+    const orchInput = usage.orchestrationInput ?? 0;
+    const orchCacheRead = usage.orchestrationCacheRead ?? 0;
+    const orchOutput = usage.orchestrationOutput ?? 0;
+    if (orchInput + orchCacheRead + orchOutput > 0) {
+      line += `  Orch: ${fmtTokens(orchInput)}/${fmtTokens(orchCacheRead)}/${fmtTokens(orchOutput)}`;
+    }
+    return line;
+  }
+  return `Cache: ${hitRate}%  ${ratio}  Sum: ${fmtTokens(sum)}  Cost: ${fmtUsd(costVal)}`;
+}
+
+/** Build a token-only status line for ChatGPT/Codex when model cost is unavailable. */
+export function buildChatGPTTokenLine(
+  usage: ChatGPTUsage,
+  pad: boolean,
+  detailMode: boolean,
+  totalTokens?: number,
+): string {
+  const totalIn = usage.input + usage.cacheRead;
+  const sum = totalTokens ?? usage.input + usage.cacheRead + usage.cacheWrite + usage.output
+    + (usage.orchestrationInput ?? 0) + (usage.orchestrationCacheRead ?? 0) + (usage.orchestrationOutput ?? 0);
+  const hitRate = totalIn > 0 ? Math.round((usage.cacheRead / totalIn) * 100) : 0;
+
+  if (pad) {
+    if (detailMode) {
+      const pct = String(hitRate).padStart(3);
+      let line = `Input: ${padTokens(usage.cacheRead, PAD_IN)}/${padTokens(totalIn, PAD_IN)} (${pct}%)  Output: ${padTokens(usage.output, PAD_OUT)}`;
+      if (usage.cacheWrite > 0) line += `  Write: ${padTokens(usage.cacheWrite, PAD_OUT)}`;
+      line += `  Sum: ${padSum(sum)}`;
+      if (usage.reasoningTokens !== undefined && usage.reasoningTokens > 0) {
+        line += `  Reasoning: ${padTokens(usage.reasoningTokens, PAD_OUT)}`;
+      }
+      const orchInput = usage.orchestrationInput ?? 0;
+      const orchCacheRead = usage.orchestrationCacheRead ?? 0;
+      const orchOutput = usage.orchestrationOutput ?? 0;
+      if (orchInput + orchCacheRead + orchOutput > 0) {
+        line += `  Orch: ${fmtTokens(orchInput)}/${fmtTokens(orchCacheRead)}/${fmtTokens(orchOutput)}`;
+      }
+      return line;
+    }
+    return `Cache: ${String(hitRate).padStart(3)}%  Sum: ${padSum(sum)}`;
+  }
+
+  if (detailMode) {
+    let line = `Input: ${fmtTokens(usage.cacheRead)}/${fmtTokens(totalIn)} (${hitRate}%)  Output: ${fmtTokens(usage.output)}`;
+    if (usage.cacheWrite > 0) line += `  Write: ${fmtTokens(usage.cacheWrite)}`;
+    line += `  Sum: ${fmtTokens(sum)}`;
+    if (usage.reasoningTokens !== undefined && usage.reasoningTokens > 0) {
+      line += `  Reasoning: ${fmtTokens(usage.reasoningTokens)}`;
+    }
+    const orchInput = usage.orchestrationInput ?? 0;
+    const orchCacheRead = usage.orchestrationCacheRead ?? 0;
+    const orchOutput = usage.orchestrationOutput ?? 0;
+    if (orchInput + orchCacheRead + orchOutput > 0) {
+      line += `  Orch: ${fmtTokens(orchInput)}/${fmtTokens(orchCacheRead)}/${fmtTokens(orchOutput)}`;
+    }
+    return line;
+  }
+  return `Cache: ${hitRate}%  Sum: ${fmtTokens(sum)}`;
+}

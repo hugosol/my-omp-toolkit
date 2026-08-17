@@ -10,6 +10,11 @@ import {
   fmtCost,
   cacheInOutRatio,
   buildStatusLine,
+  usdCost,
+  fmtUsd,
+  cacheInOutWriteRatio,
+  buildChatGPTStatusLine,
+  buildChatGPTTokenLine,
 } from "../../extensions/deepseek-cost/cost-calc";
 
 const PRO_PEAK = { input: 9, cacheRead: 0.3, output: 27 };
@@ -378,5 +383,143 @@ describe("buildStatusLine", () => {
         expect(line).not.toContain("\u00A5I/O:");
       }
     }
+  });
+});
+
+// ============================================================
+// usdCost
+// ============================================================
+
+describe("usdCost", () => {
+  const LUNA_COST = { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 };
+
+  test("calculates USD cost from per-million rates", () => {
+    // 1M input ($0.20) + 1M cacheRead ($0.02) + 1M output ($1.20) = $1.42
+    expect(usdCost({ input: 1_000_000, cacheRead: 1_000_000, cacheWrite: 0, output: 1_000_000 }, LUNA_COST)).toBeCloseTo(1.42, 6);
+  });
+
+  test("includes cacheWrite and orchestration", () => {
+    const usage = {
+      input: 1_000_000,
+      cacheRead: 0,
+      cacheWrite: 1_000_000,
+      output: 0,
+      orchestrationInput: 1_000_000,
+      orchestrationCacheRead: 500_000,
+      orchestrationOutput: 100_000,
+    };
+    // input 0.20 + write 0.25 + orch input 0.20 + orch cache 0.01 + orch output 0.12 = 0.78
+    expect(usdCost(usage, LUNA_COST)).toBeCloseTo(0.78, 6);
+  });
+});
+
+// ============================================================
+// fmtUsd
+// ============================================================
+
+describe("fmtUsd", () => {
+  test("uses 2 decimals for cost >= 0.01", () => {
+    expect(fmtUsd(0.5)).toBe("$0.50");
+    expect(fmtUsd(1)).toBe("$1.00");
+  });
+
+  test("uses 4 decimals for cost < 0.01", () => {
+    expect(fmtUsd(0.005)).toBe("$0.0050");
+    expect(fmtUsd(0)).toBe("$0.0000");
+  });
+});
+
+// ============================================================
+// cacheInOutWriteRatio
+// ============================================================
+
+describe("cacheInOutWriteRatio", () => {
+  const SOL_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 };
+
+  test("returns placeholder when total cost is zero", () => {
+    expect(cacheInOutWriteRatio({ input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, SOL_COST)).toBe("\u0024CacheRead/In/CacheWrite/Out：--:--:--:--");
+  });
+
+  test("returns 0:100:0:0 when only input cost exists", () => {
+    expect(cacheInOutWriteRatio({ input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }, SOL_COST)).toBe("\u0024CacheRead/In/CacheWrite/Out：0:100:0:0");
+  });
+
+  test("returns four-way ratio for mixed usage", () => {
+    // input 1M ($5) + cache 1M ($0.5) + write 1M ($6.25) + output 100K ($3) = $14.75
+    // raw: 3.39 : 33.90 : 42.37 : 20.34; floors 3+33+42+20=98, remainders to write, input, output
+    const result = cacheInOutWriteRatio(
+      { input: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000, output: 100_000 },
+      SOL_COST,
+    );
+    expect(result).toMatch(/^\u0024CacheRead\/In\/CacheWrite\/Out：\d+:\d+:\d+:\d+$/);
+    expect(result).toBe("\u0024CacheRead/In/CacheWrite/Out：4:34:42:20");
+  });
+});
+
+// ============================================================
+// buildChatGPTStatusLine
+// ============================================================
+
+describe("buildChatGPTStatusLine", () => {
+  const LUNA_COST = { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 };
+  const usage = { input: 100_000, cacheRead: 50_000, cacheWrite: 10_000, output: 20_000 };
+
+  test("brief + pad mode shows cache hit rate, four-way ratio, sum and cost", () => {
+    const line = buildChatGPTStatusLine(usage, LUNA_COST, true, false);
+    expect(line).toContain("Cache:");
+    expect(line).toContain("33%"); // 50K / 150K
+    expect(line).toContain("$CacheRead/In/CacheWrite/Out：");
+    expect(line).toContain("Sum:");
+    expect(line).toContain("Cost:");
+    expect(line).toContain("$");
+  });
+
+  test("detail + pad mode includes Write and orchestration when present", () => {
+    const line = buildChatGPTStatusLine(
+      { ...usage, orchestrationInput: 10_000, orchestrationCacheRead: 2_000, orchestrationOutput: 5_000, reasoningTokens: 3_000 },
+      LUNA_COST,
+      true,
+      true,
+      200_000,
+    );
+    expect(line).toContain("Input:");
+    expect(line).toContain("Output:");
+    expect(line).toContain("Write:");
+    expect(line).toContain("Reasoning:");
+    expect(line).toContain("Orch:");
+  });
+
+  test("uses totalTokens for Sum when provided", () => {
+    const line = buildChatGPTStatusLine(usage, LUNA_COST, false, false, 999_999);
+    expect(line).toContain("Sum: 1,000.0K");
+  });
+});
+
+// ============================================================
+// buildChatGPTTokenLine
+// ============================================================
+
+describe("buildChatGPTTokenLine", () => {
+  const usage = { input: 100_000, cacheRead: 50_000, cacheWrite: 10_000, output: 20_000 };
+
+  test("brief mode shows cache hit rate and sum without cost", () => {
+    const line = buildChatGPTTokenLine(usage, false, false);
+    expect(line).toContain("Cache:");
+    expect(line).toContain("33%");
+    expect(line).toContain("Sum:");
+    expect(line).not.toContain("Cost:");
+    expect(line).not.toContain("$Cache");
+  });
+
+  test("detail mode includes Write, Reasoning and Orch when present", () => {
+    const line = buildChatGPTTokenLine(
+      { ...usage, orchestrationInput: 10_000, orchestrationCacheRead: 2_000, orchestrationOutput: 5_000, reasoningTokens: 3_000 },
+      false,
+      true,
+    );
+    expect(line).toContain("Input:");
+    expect(line).toContain("Write:");
+    expect(line).toContain("Reasoning:");
+    expect(line).toContain("Orch:");
   });
 });
