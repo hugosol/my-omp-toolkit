@@ -6,20 +6,25 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 
 - **上下文预算进度条** — 当前上下文 token 用量 vs 可配置预算（默认 220K），按比例着色
 - **即时费用显示** — 每回合和累计的 ¥ 花费、缓存命中率、输入/输出比
+- **高峰/空闲动态计价** — 按北京时间高峰/空闲自动切换价格；进度条左侧显示 `🔥`（高峰）/ `🌙`（空闲）
 - **每日花费追踪** — 按 session 分组统计，数据持久化到 `~/.omp/cost-archive/deepseek-cost.json`
 - **分段进度条** — 可视化每个 session 的费用占比，支持精细模式（≤ ¥20）和粗模式（> ¥20）
 - **余额查询** — 自动查询 DeepSeek 账户余额
 
 ## 定价
 
-基于 DeepSeek 官方价格表（RMB / 百万 tokens）：
+基于 DeepSeek 官方价格表（RMB / 百万 tokens）。高峰时段为北京时间 `[09:00, 12:00]` 和 `[14:00, 18:00]`（闭区间，边界按高峰计）。
 
-| 模型 | input（cache miss） | cacheRead（cache hit） | output |
-|------|------|------|------|
-| deepseek-v4-pro | ¥3 | ¥0.025 | ¥6 |
-| deepseek-v4-flash | ¥1 | ¥0.02 | ¥2 |
+| 模型 | 时段 | input（cache miss） | cacheRead（cache hit） | output |
+|------|------|------|------|------|
+| deepseek-v4-pro | 高峰 | ¥9 | ¥0.30 | ¥27 |
+| deepseek-v4-pro | 空闲 | ¥4.5 | ¥0.15 | ¥13.5 |
+| deepseek-v4-flash | 高峰 | ¥3 | ¥0.10 | ¥9 |
+| deepseek-v4-flash | 空闲 | ¥1.5 | ¥0.05 | ¥4.5 |
 
 仅追踪以上两个模型；其他模型/渠道不显示 widget、不累计费用。
+
+计价以每次 API 请求发出时刻（`before_provider_request`）锚定价格档位；同一请求的 `message_end` 用量按该档位计费。空闲时定时器会在下一个边界（09:00 / 12:00 / 14:00 / 18:00）自动刷新图标。
 
 ## 命令
 
@@ -37,12 +42,7 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 - `lastInput` / `lastCacheRead` / `lastOutput` — 上次已知的累计值
 - `cost` — 该 session 累计花费
 
-当 agent 回合结束（`agent_end` 事件），扩展计算增量：
-```
-delta = 当前累计 - 上次已知值
-```
-
-增量用于更新每日总花费和 session 花费。使用"上次已知值"而非"上一回合的 previousTotal"，确保 fork / resume 后不会重复计算。
+token 增量仍在 `agent_end` 用累计值计算，用于更新 `totalTokens` 和 `last*`；费用则由回合内每次 API 请求的 `message_end` 按锚定价累加，`agent_end` 时把 `turnCost` 写入每日总花费和 session 花费。使用"上次已知值"而非"上一回合的 previousTotal"，确保 fork / resume 后不会重复计算 token。
 
 ### 状态管理
 
@@ -55,11 +55,12 @@ delta = 当前累计 - 上次已知值
 ```
 index.ts           入口：事件注册 + 命令处理 + UI 刷新
 tracker-state.ts   TrackerState 类型 + 工厂函数
-cost-calc.ts       纯函数：费用计算、token 格式化、状态行构建
+cost-calc.ts       纯函数：价格解析、费用计算、token 格式化、状态行构建
+turn-cost.ts       单回合 per-request 费用累计器
 daily-tracker.ts   每日持久化：JSON 读写、归档、session 追踪
 segment-bar.ts     分段进度条渲染：fine / coarse 双模式
 ```
 
 ## 技术细节
 
-纯扩展实现，通过 OMP Extension API 的 `session_start`、`agent_end`、`agent_start` 等事件 hook 实现，不修改 OMP 源代码。
+纯扩展实现，通过 OMP Extension API 的 `session_start`、`agent_start`、`before_provider_request`、`message_end`、`agent_end` 等事件 hook 实现，不修改 OMP 源代码。边界刷新使用 `ctx.setTimeout` 精确调度到下一个高峰/空闲边界。

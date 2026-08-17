@@ -2,6 +2,9 @@ import { describe, test, expect } from "bun:test";
 import {
   PRICE_RMB_PER_1M,
   priceForModel,
+  resolvePriceTier,
+  isPeakHour,
+  nextBoundary,
   fmtTokens,
   rmbCost,
   fmtCost,
@@ -9,21 +12,24 @@ import {
   buildStatusLine,
 } from "../../extensions/deepseek-cost/cost-calc";
 
+const PRO_PEAK = { input: 9, cacheRead: 0.3, output: 27 };
+const PRO_OFF_PEAK = { input: 4.5, cacheRead: 0.15, output: 13.5 };
+const FLASH_PEAK = { input: 3, cacheRead: 0.1, output: 9 };
+const FLASH_OFF_PEAK = { input: 1.5, cacheRead: 0.05, output: 4.5 };
+
 // ============================================================
-// Constants
+// PRICE_RMB_PER_1M
 // ============================================================
 
 describe("PRICE_RMB_PER_1M", () => {
-  test("has pro pricing tiers (RMB per 1M tokens)", () => {
-    expect(PRICE_RMB_PER_1M["deepseek-v4-pro"].input).toBe(3);
-    expect(PRICE_RMB_PER_1M["deepseek-v4-pro"].cacheRead).toBe(0.025);
-    expect(PRICE_RMB_PER_1M["deepseek-v4-pro"].output).toBe(6);
+  test("has pro peak/off-peak schedules (RMB per 1M tokens)", () => {
+    expect(PRICE_RMB_PER_1M["deepseek-v4-pro"].peak).toEqual(PRO_PEAK);
+    expect(PRICE_RMB_PER_1M["deepseek-v4-pro"].offPeak).toEqual(PRO_OFF_PEAK);
   });
 
-  test("has flash pricing tiers (RMB per 1M tokens)", () => {
-    expect(PRICE_RMB_PER_1M["deepseek-v4-flash"].input).toBe(1);
-    expect(PRICE_RMB_PER_1M["deepseek-v4-flash"].cacheRead).toBe(0.02);
-    expect(PRICE_RMB_PER_1M["deepseek-v4-flash"].output).toBe(2);
+  test("has flash peak/off-peak schedules (RMB per 1M tokens)", () => {
+    expect(PRICE_RMB_PER_1M["deepseek-v4-flash"].peak).toEqual(FLASH_PEAK);
+    expect(PRICE_RMB_PER_1M["deepseek-v4-flash"].offPeak).toEqual(FLASH_OFF_PEAK);
   });
 });
 
@@ -32,19 +38,17 @@ describe("PRICE_RMB_PER_1M", () => {
 // ============================================================
 
 describe("priceForModel", () => {
-  test("returns pro tier for deepseek-v4-pro", () => {
+  test("returns pro schedule for deepseek-v4-pro", () => {
     expect(priceForModel("deepseek-v4-pro")).toEqual({
-      input: 3,
-      cacheRead: 0.025,
-      output: 6,
+      peak: PRO_PEAK,
+      offPeak: PRO_OFF_PEAK,
     });
   });
 
-  test("returns flash tier for deepseek-v4-flash", () => {
+  test("returns flash schedule for deepseek-v4-flash", () => {
     expect(priceForModel("deepseek-v4-flash")).toEqual({
-      input: 1,
-      cacheRead: 0.02,
-      output: 2,
+      peak: FLASH_PEAK,
+      offPeak: FLASH_OFF_PEAK,
     });
   });
 
@@ -55,6 +59,127 @@ describe("priceForModel", () => {
 
   test("returns undefined when no model is set", () => {
     expect(priceForModel(undefined)).toBeUndefined();
+  });
+});
+
+// ============================================================
+// isPeakHour
+// ============================================================
+
+describe("isPeakHour", () => {
+  test("returns false before 09:00 Beijing", () => {
+    // 2026-08-17 08:00 Asia/Shanghai = 00:00Z
+    expect(isPeakHour(new Date("2026-08-17T00:00:00.000Z"))).toBe(false);
+  });
+
+  test("returns true at 09:00 Beijing (inclusive start)", () => {
+    expect(isPeakHour(new Date("2026-08-17T01:00:00.000Z"))).toBe(true);
+  });
+
+  test("returns true during morning peak", () => {
+    // 11:59:59.999 Asia/Shanghai
+    expect(isPeakHour(new Date("2026-08-17T03:59:59.999Z"))).toBe(true);
+  });
+
+  test("returns true at 12:00 Beijing exactly (inclusive end)", () => {
+    expect(isPeakHour(new Date("2026-08-17T04:00:00.000Z"))).toBe(true);
+  });
+
+  test("returns false just after 12:00 Beijing", () => {
+    expect(isPeakHour(new Date("2026-08-17T04:00:00.001Z"))).toBe(false);
+  });
+
+  test("returns false during midday off-peak", () => {
+    // 13:00 Asia/Shanghai
+    expect(isPeakHour(new Date("2026-08-17T05:00:00.000Z"))).toBe(false);
+  });
+
+  test("returns true at 14:00 Beijing (inclusive start)", () => {
+    expect(isPeakHour(new Date("2026-08-17T06:00:00.000Z"))).toBe(true);
+  });
+
+  test("returns true at 18:00 Beijing exactly (inclusive end)", () => {
+    expect(isPeakHour(new Date("2026-08-17T10:00:00.000Z"))).toBe(true);
+  });
+
+  test("returns false just after 18:00 Beijing", () => {
+    expect(isPeakHour(new Date("2026-08-17T10:00:00.001Z"))).toBe(false);
+  });
+
+  test("returns false during evening off-peak", () => {
+    // 21:00 Asia/Shanghai
+    expect(isPeakHour(new Date("2026-08-17T13:00:00.000Z"))).toBe(false);
+  });
+});
+
+// ============================================================
+// nextBoundary
+// ============================================================
+
+describe("nextBoundary", () => {
+  test("from 08:00 Beijing returns 09:00 same day", () => {
+    expect(nextBoundary(new Date("2026-08-17T00:00:00.000Z"))).toEqual(new Date("2026-08-17T01:00:00.000Z"));
+  });
+
+  test("from exactly 09:00 Beijing returns 12:00 same day", () => {
+    expect(nextBoundary(new Date("2026-08-17T01:00:00.000Z"))).toEqual(new Date("2026-08-17T04:00:00.000Z"));
+  });
+
+  test("from 11:59 Beijing returns 12:00 same day", () => {
+    expect(nextBoundary(new Date("2026-08-17T03:59:00.000Z"))).toEqual(new Date("2026-08-17T04:00:00.000Z"));
+  });
+
+  test("from exactly 12:00 Beijing returns 14:00 same day", () => {
+    expect(nextBoundary(new Date("2026-08-17T04:00:00.000Z"))).toEqual(new Date("2026-08-17T06:00:00.000Z"));
+  });
+
+  test("from 13:59 Beijing returns 14:00 same day", () => {
+    expect(nextBoundary(new Date("2026-08-17T05:59:00.000Z"))).toEqual(new Date("2026-08-17T06:00:00.000Z"));
+  });
+
+  test("from exactly 14:00 Beijing returns 18:00 same day", () => {
+    expect(nextBoundary(new Date("2026-08-17T06:00:00.000Z"))).toEqual(new Date("2026-08-17T10:00:00.000Z"));
+  });
+
+  test("from exactly 18:00 Beijing returns 09:00 next day", () => {
+    expect(nextBoundary(new Date("2026-08-17T10:00:00.000Z"))).toEqual(new Date("2026-08-18T01:00:00.000Z"));
+  });
+
+  test("from evening returns 09:00 next day", () => {
+    expect(nextBoundary(new Date("2026-08-17T13:00:00.000Z"))).toEqual(new Date("2026-08-18T01:00:00.000Z"));
+  });
+});
+
+// ============================================================
+// resolvePriceTier
+// ============================================================
+
+describe("resolvePriceTier", () => {
+  const peakDate = new Date("2026-08-17T01:00:00.000Z"); // 09:00 Beijing
+  const offPeakDate = new Date("2026-08-17T05:00:00.000Z"); // 13:00 Beijing
+
+  test("returns pro peak tier during peak", () => {
+    expect(resolvePriceTier("deepseek-v4-pro", peakDate)).toEqual(PRO_PEAK);
+  });
+
+  test("returns pro off-peak tier during off-peak", () => {
+    expect(resolvePriceTier("deepseek-v4-pro", offPeakDate)).toEqual(PRO_OFF_PEAK);
+  });
+
+  test("returns flash peak tier during peak", () => {
+    expect(resolvePriceTier("deepseek-v4-flash", peakDate)).toEqual(FLASH_PEAK);
+  });
+
+  test("returns flash off-peak tier during off-peak", () => {
+    expect(resolvePriceTier("deepseek-v4-flash", offPeakDate)).toEqual(FLASH_OFF_PEAK);
+  });
+
+  test("returns undefined for unsupported model", () => {
+    expect(resolvePriceTier("gpt-5", peakDate)).toBeUndefined();
+  });
+
+  test("returns undefined when model is missing", () => {
+    expect(resolvePriceTier(undefined, peakDate)).toBeUndefined();
   });
 });
 
@@ -76,14 +201,11 @@ describe("fmtTokens", () => {
   });
 
   test("handles rounding at K boundary", () => {
-    // 123,500 -> 123.5 -> 123.5K
     expect(fmtTokens(123_500)).toBe("123.5K");
-    // 123,999 -> 123.999... -> rounds to 124.0K
     expect(fmtTokens(123_999)).toBe("124.0K");
   });
 
   test("handles carry from fraction rounding", () => {
-    // 999,950 -> k=999.95, frac=10 -> carry=1 -> 1,000.0K
     expect(fmtTokens(999_950)).toBe("1,000.0K");
   });
 });
@@ -93,58 +215,46 @@ describe("fmtTokens", () => {
 // ============================================================
 
 describe("rmbCost", () => {
-  const pro = PRICE_RMB_PER_1M["deepseek-v4-pro"];
-  const flash = PRICE_RMB_PER_1M["deepseek-v4-flash"];
-
   test("returns zero for zero tokens", () => {
-    expect(rmbCost(0, 0, 0, pro)).toBe(0);
+    expect(rmbCost(0, 0, 0, PRO_PEAK)).toBe(0);
   });
 
-  test("calculates input-only cost for pro", () => {
-    // 1M input tokens x 3 RMB = 3 RMB
-    expect(rmbCost(1_000_000, 0, 0, pro)).toBe(3);
+  test("calculates pro peak input-only cost", () => {
+    expect(rmbCost(1_000_000, 0, 0, PRO_PEAK)).toBe(9);
   });
 
-  test("calculates output-only cost for pro", () => {
-    // 1M output tokens x 6 RMB = 6 RMB
-    expect(rmbCost(0, 0, 1_000_000, pro)).toBe(6);
+  test("calculates pro peak output-only cost", () => {
+    expect(rmbCost(0, 0, 1_000_000, PRO_PEAK)).toBe(27);
   });
 
-  test("calculates cache-read cost for pro", () => {
-    // 1M cache read tokens x 0.025 RMB = 0.025 RMB
-    expect(rmbCost(0, 1_000_000, 0, pro)).toBe(0.025);
+  test("calculates pro peak cache-read cost", () => {
+    expect(rmbCost(0, 1_000_000, 0, PRO_PEAK)).toBe(0.3);
   });
 
-  test("calculates mixed cost for pro", () => {
-    // 500K input (1.5 RMB) + 200K cache (0.005 RMB) + 100K output (0.6 RMB) = 2.105 RMB
-    const cost = rmbCost(500_000, 200_000, 100_000, pro);
-    expect(cost).toBeCloseTo(2.105, 6);
+  test("calculates mixed cost for pro peak", () => {
+    // 500K input (4.5) + 200K cache (0.06) + 100K output (2.7) = 7.26
+    expect(rmbCost(500_000, 200_000, 100_000, PRO_PEAK)).toBeCloseTo(7.26, 6);
   });
 
-  test("calculates input-only cost for flash", () => {
-    // 1M input tokens x 1 RMB = 1 RMB
-    expect(rmbCost(1_000_000, 0, 0, flash)).toBe(1);
+  test("calculates flash off-peak input-only cost", () => {
+    expect(rmbCost(1_000_000, 0, 0, FLASH_OFF_PEAK)).toBe(1.5);
   });
 
-  test("calculates output-only cost for flash", () => {
-    // 1M output tokens x 2 RMB = 2 RMB
-    expect(rmbCost(0, 0, 1_000_000, flash)).toBe(2);
+  test("calculates flash off-peak output-only cost", () => {
+    expect(rmbCost(0, 0, 1_000_000, FLASH_OFF_PEAK)).toBe(4.5);
   });
 
-  test("calculates cache-read cost for flash", () => {
-    // 1M cache read tokens x 0.02 RMB = 0.02 RMB
-    expect(rmbCost(0, 1_000_000, 0, flash)).toBe(0.02);
+  test("calculates flash off-peak cache-read cost", () => {
+    expect(rmbCost(0, 1_000_000, 0, FLASH_OFF_PEAK)).toBe(0.05);
   });
 
-  test("calculates mixed cost for flash", () => {
-    // 500K input (0.5 RMB) + 200K cache (0.004 RMB) + 100K output (0.2 RMB) = 0.704 RMB
-    const cost = rmbCost(500_000, 200_000, 100_000, flash);
-    expect(cost).toBeCloseTo(0.704, 6);
+  test("calculates mixed cost for flash off-peak", () => {
+    // 500K input (0.75) + 200K cache (0.01) + 100K output (0.45) = 1.21
+    expect(rmbCost(500_000, 200_000, 100_000, FLASH_OFF_PEAK)).toBeCloseTo(1.21, 6);
   });
 
   test("handles fractional tokens gracefully", () => {
-    const cost = rmbCost(1, 0, 0, pro);
-    expect(cost).toBe(3 / 1_000_000);
+    expect(rmbCost(1, 0, 0, PRO_PEAK)).toBe(9 / 1_000_000);
   });
 });
 
@@ -171,36 +281,31 @@ describe("fmtCost", () => {
 // ============================================================
 
 describe("ioRatio", () => {
-  const pro = PRICE_RMB_PER_1M["deepseek-v4-pro"];
-  const flash = PRICE_RMB_PER_1M["deepseek-v4-flash"];
-
   test("returns placeholder when total cost is zero", () => {
-    expect(ioRatio({ input: 0, cacheRead: 0, output: 0 }, pro)).toBe("\u00A5I/O: --:--");
+    expect(ioRatio({ input: 0, cacheRead: 0, output: 0 }, PRO_PEAK)).toBe("\u00A5I/O: --:--");
   });
 
   test("returns 100:0 when only input cost exists", () => {
-    const result = ioRatio({ input: 1_000_000, cacheRead: 0, output: 0 }, pro);
-    expect(result).toBe("\u00A5I/O: 100:0");
+    expect(ioRatio({ input: 1_000_000, cacheRead: 0, output: 0 }, PRO_PEAK)).toBe("\u00A5I/O: 100:0");
   });
 
   test("returns 0:100 when only output cost exists", () => {
-    const result = ioRatio({ input: 0, cacheRead: 0, output: 1_000_000 }, pro);
-    expect(result).toBe("\u00A5I/O: 0:100");
+    expect(ioRatio({ input: 0, cacheRead: 0, output: 1_000_000 }, PRO_PEAK)).toBe("\u00A5I/O: 0:100");
   });
 
   test("returns proportional ratio for mixed usage", () => {
-    // input 1M (3 RMB) + cache 0 + output 500K (3 RMB) -> 50:50
-    const result = ioRatio({ input: 1_000_000, cacheRead: 0, output: 500_000 }, pro);
-    expect(result).toContain("50:50");
+    // input 1M peak (9 RMB) + output 500K peak (13.5 RMB) -> 40:60
+    const result = ioRatio({ input: 1_000_000, cacheRead: 0, output: 500_000 }, PRO_PEAK);
+    expect(result).toContain("40:60");
   });
 
   test("cache-heavy ratio differs between pro and flash", () => {
     // input 1M + cache 1M + output 100K:
-    // pro   iCost = 3 + 0.025 = 3.025, oCost = 0.6   -> 3.025/3.625 = 83.4% -> 83:17
-    // flash iCost = 1 + 0.02 = 1.02,  oCost = 0.2    -> 1.02/1.22  = 83.6% -> 84:16
+    // pro peak: iCost = 9 + 0.3 = 9.3, oCost = 2.7 -> 9.3/12 = 77.5% -> 78:22
+    // flash off-peak: iCost = 1.5 + 0.05 = 1.55, oCost = 0.45 -> 1.55/2 = 77.5% -> 78:22
     const usage = { input: 1_000_000, cacheRead: 1_000_000, output: 100_000 };
-    expect(ioRatio(usage, pro)).toContain("83:17");
-    expect(ioRatio(usage, flash)).toContain("84:16");
+    expect(ioRatio(usage, PRO_PEAK)).toContain("78:22");
+    expect(ioRatio(usage, FLASH_OFF_PEAK)).toContain("78:22");
   });
 });
 
@@ -209,14 +314,12 @@ describe("ioRatio", () => {
 // ============================================================
 
 describe("buildStatusLine", () => {
-  const pro = PRICE_RMB_PER_1M["deepseek-v4-pro"];
-  const flash = PRICE_RMB_PER_1M["deepseek-v4-flash"];
   const usage = { input: 100_000, cacheRead: 50_000, output: 20_000 };
 
   test("brief + pad mode shows cache hit rate and cost", () => {
-    const line = buildStatusLine(usage, true, false, pro);
+    const line = buildStatusLine(usage, true, false, PRO_PEAK);
     expect(line).toContain("Cache:");
-    expect(line).toContain("33%");  // 50K / 150K
+    expect(line).toContain("33%"); // 50K / 150K
     expect(line).toContain("Sum:");
     expect(line).toContain("Cost:");
     expect(line).not.toContain("Input:");
@@ -224,7 +327,7 @@ describe("buildStatusLine", () => {
   });
 
   test("detail + pad mode shows input breakdown", () => {
-    const line = buildStatusLine(usage, true, true, pro);
+    const line = buildStatusLine(usage, true, true, PRO_PEAK);
     expect(line).toContain("Input:");
     expect(line).toContain("Output:");
     expect(line).toContain("Sum:");
@@ -232,33 +335,34 @@ describe("buildStatusLine", () => {
   });
 
   test("brief + no-pad mode", () => {
-    const line = buildStatusLine(usage, false, false, pro);
+    const line = buildStatusLine(usage, false, false, PRO_PEAK);
     expect(line).toContain("Cache:");
     expect(line).toContain("33%");
   });
 
   test("detail + no-pad mode", () => {
-    const line = buildStatusLine(usage, false, true, pro);
+    const line = buildStatusLine(usage, false, true, PRO_PEAK);
     expect(line).toContain("Input:");
     expect(line).toContain("Output:");
   });
 
   test("zero usage displays 0% hit rate", () => {
-    const line = buildStatusLine({ input: 0, cacheRead: 0, output: 0 }, false, false, pro);
+    const line = buildStatusLine({ input: 0, cacheRead: 0, output: 0 }, false, false, PRO_PEAK);
     expect(line).toContain("0%");
   });
 
   test("handles all-cache-hit scenario", () => {
-    const line = buildStatusLine({ input: 0, cacheRead: 100_000, output: 0 }, false, false, pro);
+    const line = buildStatusLine({ input: 0, cacheRead: 100_000, output: 0 }, false, false, PRO_PEAK);
     expect(line).toContain("100%");
   });
 
   test("cost reflects the model tier", () => {
     // usage: 100K input + 50K cache + 20K output
-    // flash: 0.1 + 0.001 + 0.04 = 0.141 -> "¥0.14"; pro: 0.3 + 0.00125 + 0.12 = 0.42125 -> "¥0.42"
-    const flashLine = buildStatusLine(usage, false, true, flash);
-    const proLine = buildStatusLine(usage, false, true, pro);
-    expect(flashLine).toContain("\u00A50.14");
-    expect(proLine).toContain("\u00A50.42");
+    // flash off-peak: 0.15 + 0.0025 + 0.09 = 0.2425 -> "¥0.24"
+    // pro peak: 0.9 + 0.015 + 0.54 = 1.455 -> "¥1.46"
+    const flashLine = buildStatusLine(usage, false, true, FLASH_OFF_PEAK);
+    const proLine = buildStatusLine(usage, false, true, PRO_PEAK);
+    expect(flashLine).toContain("\u00A50.24");
+    expect(proLine).toContain("\u00A51.46");
   });
 });

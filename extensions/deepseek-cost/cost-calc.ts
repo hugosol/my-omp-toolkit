@@ -1,6 +1,7 @@
 /**
  * Cost calculation and token formatting — pure functions, no I/O.
- * Pricing follows the official DeepSeek price list (RMB per million tokens).
+ * Pricing follows the official DeepSeek price list (RMB per million tokens)
+ * with Beijing peak/off-peak time-of-day rates.
  */
 
 export interface PriceTier {
@@ -9,15 +10,68 @@ export interface PriceTier {
   output: number;
 }
 
-export const PRICE_RMB_PER_1M: Record<string, PriceTier> = {
-  "deepseek-v4-pro": { input: 3, cacheRead: 0.025, output: 6 },
-  "deepseek-v4-flash": { input: 1, cacheRead: 0.02, output: 2 },
+export interface PriceSchedule {
+  peak: PriceTier;
+  offPeak: PriceTier;
+}
+
+export const PRICE_RMB_PER_1M: Record<string, PriceSchedule> = {
+  "deepseek-v4-pro": {
+    peak: { input: 9, cacheRead: 0.3, output: 27 },
+    offPeak: { input: 4.5, cacheRead: 0.15, output: 13.5 },
+  },
+  "deepseek-v4-flash": {
+    peak: { input: 3, cacheRead: 0.1, output: 9 },
+    offPeak: { input: 1.5, cacheRead: 0.05, output: 4.5 },
+  },
 };
 
-/** Resolve the price tier for a model id; undefined when the model is not tracked. */
-export function priceForModel(modelId: string | undefined): PriceTier | undefined {
+/** Resolve the price schedule for a model id; undefined when the model is not tracked. */
+export function priceForModel(modelId: string | undefined): PriceSchedule | undefined {
   if (!modelId) return undefined;
   return PRICE_RMB_PER_1M[modelId];
+}
+
+const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const PEAK_START_1 = 9 * 60 * 60 * 1000;
+const PEAK_END_1 = 12 * 60 * 60 * 1000;
+const PEAK_START_2 = 14 * 60 * 60 * 1000;
+const PEAK_END_2 = 18 * 60 * 60 * 1000;
+
+/** Milliseconds since midnight in Asia/Shanghai for the given instant. */
+function beijingMsOfDay(date: Date): number {
+  return ((date.getTime() + BEIJING_OFFSET_MS) % DAY_MS + DAY_MS) % DAY_MS;
+}
+
+/**
+ * Whether the given instant is DeepSeek peak time in Beijing.
+ * Peak intervals are closed: [09:00, 12:00] and [14:00, 18:00].
+ */
+export function isPeakHour(date: Date): boolean {
+  const ms = beijingMsOfDay(date);
+  return (ms >= PEAK_START_1 && ms <= PEAK_END_1) || (ms >= PEAK_START_2 && ms <= PEAK_END_2);
+}
+
+/** Resolve the effective price tier for a model at a given instant. */
+export function resolvePriceTier(modelId: string | undefined, date: Date): PriceTier | undefined {
+  const schedule = priceForModel(modelId);
+  if (!schedule) return undefined;
+  return isPeakHour(date) ? schedule.peak : schedule.offPeak;
+}
+
+/** Absolute time (ms) of the next peak/off-peak boundary strictly after `date`. */
+export function nextBoundary(date: Date): Date {
+  const shifted = date.getTime() + BEIJING_OFFSET_MS;
+  const dayStartShifted = Math.floor(shifted / DAY_MS) * DAY_MS;
+  const dayStartMs = dayStartShifted - BEIJING_OFFSET_MS;
+  const boundaries = [PEAK_START_1, PEAK_END_1, PEAK_START_2, PEAK_END_2];
+  for (const b of boundaries) {
+    const candidate = dayStartMs + b;
+    if (candidate > date.getTime()) return new Date(candidate);
+  }
+  return new Date(dayStartMs + DAY_MS + PEAK_START_1);
 }
 
 const PAD_IN = 7;

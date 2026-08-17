@@ -3,6 +3,8 @@
  * Each extension session creates one instance via createTrackerState().
  */
 
+import { createTurnCostState, type TurnCostState } from "./turn-cost";
+
 export const DEFAULT_BUDGET = 220_000;
 
 export interface TokenCounts {
@@ -20,6 +22,8 @@ export interface TrackerState {
   /** Raw balance amount in CNY, null when not yet fetched or unavailable. */
   balance: number | null;
   detailMode: boolean;
+  /** Per-turn API request cost accumulator. */
+  turnCost: TurnCostState;
 }
 
 export function createTrackerState(): TrackerState {
@@ -30,5 +34,6 @@ export function createTrackerState(): TrackerState {
     turnDelta: null,
     balance: null,
     detailMode: false,
+    turnCost: createTurnCostState(),
   };
 }

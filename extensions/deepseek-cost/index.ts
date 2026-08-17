@@ -6,9 +6,11 @@
  * (default 220K).  Also tracks daily accumulated spend per session,
  * persisted to ~/.omp/cost-archive/deepseek-cost.json.
  *
- * Pricing (RMB per million tokens):
- *   deepseek-v4-pro:   input (cache miss): ¥3     cacheRead: ¥0.025   output: ¥6
- *   deepseek-v4-flash: input (cache miss): ¥1     cacheRead: ¥0.02    output: ¥2
+ * Pricing (RMB per million tokens, Beijing peak/off-peak):
+ *   deepseek-v4-pro:   peak input ¥9 / cache ¥0.30 / output ¥27
+ *                      off-peak input ¥4.5 / cache ¥0.15 / output ¥13.5
+ *   deepseek-v4-flash: peak input ¥3 / cache ¥0.10 / output ¥9
+ *                      off-peak input ¥1.5 / cache ¥0.05 / output ¥4.5
  *
  * Commands:
  *   /budget <N>K   — Set progress bar max, session-scoped (e.g. /budget 300K).
@@ -22,12 +24,15 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { createTrackerState, DEFAULT_BUDGET, type TrackerState } from "./tracker-state";
 import {
   priceForModel,
-  rmbCost,
+  resolvePriceTier,
+  isPeakHour,
+  nextBoundary,
   fmtTokens,
   fmtCost,
   buildStatusLine,
 } from "./cost-calc";
 import { createDailyTracker, type DailyTracker } from "./daily-tracker";
+import { anchorRequest, addMessageCost, finishTurn } from "./turn-cost";
 import { buildSegmentBar } from "./segment-bar";
 
 // ============================================================================
@@ -37,6 +42,16 @@ import { buildSegmentBar } from "./segment-bar";
 const WIDGET_KEY = "z-deepseek-cost";
 const BALANCE_PROVIDER = "deepseek";
 const BAR_WIDTH = 20;
+
+function getMessageUsage(message: unknown): { input: number; cacheRead: number; output: number } | null {
+  if (!message || typeof message !== "object" || !("usage" in message)) return null;
+  const usage = message.usage;
+  if (!usage || typeof usage !== "object") return null;
+  const input = "input" in usage && typeof usage.input === "number" ? usage.input : 0;
+  const cacheRead = "cacheRead" in usage && typeof usage.cacheRead === "number" ? usage.cacheRead : 0;
+  const output = "output" in usage && typeof usage.output === "number" ? usage.output : 0;
+  return { input, cacheRead, output };
+}
 
 // ============================================================================
 // Progress bar rendering (local helpers)
@@ -100,11 +115,14 @@ function refresh(
 ): void {
   if (!ctx.hasUI) return;
 
-  const tier = priceForModel(ctx.model?.id);
+  const now = new Date();
+  const tier = state.turnCost.activeTier ?? resolvePriceTier(ctx.model?.id, now);
   if (!tier) {
     ctx.ui.setWidget(WIDGET_KEY, undefined);
     return;
   }
+  const period = state.turnCost.activePeriod ?? (isPeakHour(now) ? "peak" : "offPeak");
+  const periodIcon = period === "peak" ? "\u{1F525}" : "\u{1F319}";
 
   const stats = ctx.sessionManager.getUsageStatistics();
   const cu = ctx.getContextUsage();
@@ -118,7 +136,7 @@ function refresh(
   const segBar = buildSegmentBar(dailyData.sessions, accruedCost, ctx.ui.theme);
   const bar = buildBar(state.lastContextTokens, state.budget);
 
-  const parts: string[] = [];
+  const parts: string[] = [periodIcon];
   if (bar && state.lastContextTokens !== null) {
     parts.push(colorBar(bar, state.lastContextTokens, state.budget, ctx.ui.theme));
   }
@@ -156,6 +174,18 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 
   const state = createTrackerState();
   const daily = createDailyTracker();
+  let boundaryTimer: Timer | undefined;
+
+  function scheduleBoundaryRefresh(ctx: ExtensionContext): void {
+    if (boundaryTimer) ctx.clearTimer(boundaryTimer);
+    const now = new Date();
+    const delay = Math.max(0, nextBoundary(now).getTime() - now.getTime());
+    boundaryTimer = ctx.setTimeout(() => {
+      boundaryTimer = undefined;
+      refresh(state, daily, pi, ctx);
+      scheduleBoundaryRefresh(ctx);
+    }, delay);
+  }
 
   // ── /budget command ──
   pi.registerCommand("budget", {
@@ -210,6 +240,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
     state.lastContextTokens = null;
     state.turnDelta = null;
     state.balance = null;
+    finishTurn(state.turnCost);
 
     const sessionId = ctx.sessionManager.getSessionId();
     const sessionName = ctx.sessionManager.getSessionName() ?? ctx.cwd ?? "";
@@ -222,6 +253,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
     refresh(state, daily, pi, ctx);
     state.balance = await fetchBalance(ctx);
     refresh(state, daily, pi, ctx);
+    scheduleBoundaryRefresh(ctx);
   };
 
   pi.on("session_start", onInit);
@@ -234,14 +266,29 @@ export default function deepseekCost(pi: ExtensionAPI): void {
     refresh(state, daily, pi, ctx);
   });
 
+  // ── Provider request — anchor price tier for the request being sent ──
+  pi.on("before_provider_request", (_event, ctx) => {
+    const now = new Date();
+    const tier = resolvePriceTier(ctx.model?.id, now);
+    anchorRequest(state.turnCost, tier, tier ? (isPeakHour(now) ? "peak" : "offPeak") : undefined);
+    refresh(state, daily, pi, ctx);
+  });
+
+  // ── Message end — charge the completed message against the anchored tier ──
+  pi.on("message_end", (event) => {
+    const usage = getMessageUsage(event.message);
+    if (!usage) return;
+    addMessageCost(state.turnCost, usage);
+  });
+
   // ── Agent end — accumulate daily cost + turn delta ──
   pi.on("agent_end", async (_event, ctx) => {
     const stats = ctx.sessionManager.getUsageStatistics();
     const cur = { input: stats.input, output: stats.output, cacheRead: stats.cacheRead, cacheWrite: stats.cacheWrite };
 
     // Guard: only track supported DeepSeek models
-    const tier = priceForModel(ctx.model?.id);
-    if (!tier) {
+    if (!priceForModel(ctx.model?.id)) {
+      finishTurn(state.turnCost);
       state.previousTotal = cur;
       return;
     }
@@ -249,10 +296,12 @@ export default function deepseekCost(pi: ExtensionAPI): void {
     // --- Daily accumulation ---
     const sessionId = ctx.sessionManager.getSessionId();
     if (!sessionId) {
+      finishTurn(state.turnCost);
       state.previousTotal = cur;
       return;
     }
     const sessionName = ctx.sessionManager.getSessionName() ?? ctx.cwd ?? "";
+    const turnCost = finishTurn(state.turnCost);
 
     try {
       const dailyData = daily.ensureSession(sessionId, sessionName, {
@@ -269,18 +318,20 @@ export default function deepseekCost(pi: ExtensionAPI): void {
       const deltaInput = Math.max(0, stats.input - sess.lastInput);
       const deltaCacheRead = Math.max(0, stats.cacheRead - sess.lastCacheRead);
       const deltaOutput = Math.max(0, stats.output - sess.lastOutput);
+      const hasTokenDelta = deltaInput > 0 || deltaCacheRead > 0 || deltaOutput > 0;
 
-      if (deltaInput > 0 || deltaCacheRead > 0 || deltaOutput > 0) {
-        const deltaCost = rmbCost(deltaInput, deltaCacheRead, deltaOutput, tier);
-        dailyData.totalCost += deltaCost;
-        dailyData.totalTokens.input += deltaInput;
-        dailyData.totalTokens.cacheRead += deltaCacheRead;
-        dailyData.totalTokens.output += deltaOutput;
+      if (hasTokenDelta || turnCost > 0) {
+        dailyData.totalCost += turnCost;
+        if (hasTokenDelta) {
+          dailyData.totalTokens.input += deltaInput;
+          dailyData.totalTokens.cacheRead += deltaCacheRead;
+          dailyData.totalTokens.output += deltaOutput;
 
-        sess.lastInput = stats.input;
-        sess.lastCacheRead = stats.cacheRead;
-        sess.lastOutput = stats.output;
-        sess.cost += deltaCost;
+          sess.lastInput = stats.input;
+          sess.lastCacheRead = stats.cacheRead;
+          sess.lastOutput = stats.output;
+        }
+        sess.cost += turnCost;
 
         daily.write(dailyData);
       }
