@@ -121,10 +121,13 @@ function extensionContext(
   const widgetCalls: Array<string[] | undefined> = [];
   const widgetContents: Array<unknown> = [];
   const notifyCalls: Array<{ message: string; type?: string }> = [];
+  const timers: Array<() => void | Promise<void>> = [];
   const ctx = {
     hasUI: true,
     model,
     sessionManager: {
+      getSessionId: () => "s1",
+      getSessionName: () => "test",
       getUsageStatistics: () => ({
         input: 0,
         output: 0,
@@ -155,8 +158,13 @@ function extensionContext(
         notifyCalls.push({ message, type });
       },
     },
+    setTimeout(fn: () => void | Promise<void>) {
+      timers.push(fn);
+      return timers.length;
+    },
+    clearTimer() {},
   };
-  return { ctx, notifyCalls, widgetCalls, widgetContents };
+  return { ctx, notifyCalls, widgetCalls, widgetContents, timers };
 }
 
 function fire(handlers: Map<string, EventHandler>, event: string, ctx: unknown): unknown {
@@ -401,7 +409,7 @@ describe("deepseek-cost Codex usage lifecycle", () => {
     expect(last).toContain("34.0%");
   });
 
-  test("agent_start issues no active usage request", async () => {
+  test("agent_start starts one active usage request", async () => {
     let calls = 0;
     installFakeCodexModules({
       fetchUsage: async () => {
@@ -413,9 +421,9 @@ describe("deepseek-cost Codex usage lifecycle", () => {
     const { handlers } = mountExtension();
     const { ctx } = codexContext();
 
-    fire(handlers, "agent_start", ctx);
+    await fire(handlers, "agent_start", ctx);
 
-    expect(calls).toBe(0);
+    expect(calls).toBe(1);
   });
 
   test("agent_end starts one refresh per completed turn", async () => {
@@ -591,7 +599,7 @@ describe("deepseek-cost weekly pacing widget", () => {
     expect(narrow.length).toBe(wide.length);
   });
 
-  test("existing redraw observes a later controlled time without a new usage request", async () => {
+  test("existing redraw observes a later controlled time with a new usage request", async () => {
     const WEEK = 7 * 24 * 60 * 60 * 1000;
     const fakeNow = 1_800_000_000_000;
     let calls = 0;
@@ -612,12 +620,146 @@ describe("deepseek-cost weekly pacing widget", () => {
       expect(first[0]).toContain("10.0% / 0.0%");
 
       Date.now = () => fakeNow + WEEK * 0.5;
-      fire(handlers, "agent_start", ctx);
+      await fire(handlers, "agent_start", ctx);
       const second = renderLastWidget(widgetContents, 120);
       expect(second[0]).toContain("10.0% / 50.0%");
-      expect(calls).toBe(1);
+      expect(calls).toBe(2);
     } finally {
       Date.now = originalNow;
     }
+  });
+});
+
+describe("deepseek-cost token-only mode", () => {
+  test("opencode-go deepseek-v4-* renders token-only without RMB/balance/daily", async () => {
+    await withTemporaryHome(() => {
+      const { handlers } = mountExtension();
+      const { ctx, widgetCalls } = extensionContext(
+        225_000,
+        { id: "deepseek-v4-flash", provider: "opencode-go" },
+      );
+
+      fire(handlers, "agent_start", ctx);
+
+      const lines = widgetCalls[widgetCalls.length - 1] ?? [];
+      expect(lines[0]).toContain("(225.0K/450.0K)");
+      expect(lines.some(line => line.includes("Total:"))).toBe(true);
+      const text = lines.join("\n");
+      expect(text).not.toContain("¥");
+      expect(text).not.toContain("Bal:");
+      expect(text).not.toContain("Accrued:");
+      expect(text).not.toContain("🔥");
+      expect(text).not.toContain("🌙");
+    });
+  });
+
+  test("non-DeepSeek non-Codex unknown model still hides widget", () => {
+    const { handlers } = mountExtension();
+    const { ctx, widgetCalls } = extensionContext(
+      100_000,
+      { id: "claude-sonnet", provider: "anthropic" },
+    );
+
+    fire(handlers, "agent_start", ctx);
+
+    expect(widgetCalls[widgetCalls.length - 1]).toBeUndefined();
+  });
+});
+
+describe("deepseek-cost provider-gated billing", () => {
+  test("opencode-go deepseek-v4-* does not accumulate RMB cost or daily spend", async () => {
+    await withTemporaryHome(async () => {
+      const { handlers } = mountExtension();
+      const { ctx } = extensionContext(
+        0,
+        { id: "deepseek-v4-flash", provider: "opencode-go" },
+      );
+
+      fireWithPayload(handlers, "before_provider_request", {}, ctx);
+      fireWithPayload(
+        handlers,
+        "message_end",
+        { message: { usage: { input: 1_000_000, cacheRead: 0, output: 0 } } },
+        ctx,
+      );
+      await fire(handlers, "agent_end", ctx);
+
+      const dailyPath = path.join(process.env.HOME!, ".omp", "cost-archive", "deepseek-cost.json");
+      expect(fs.existsSync(dailyPath)).toBe(false);
+    });
+  });
+});
+
+describe("deepseek-cost budget provider gate", () => {
+  test("opencode-go deepseek-v4-* rejects budget overrides", async () => {
+    await withTemporaryHome(async () => {
+      const { commands } = mountExtension();
+      const opencodeGo = extensionContext(
+        150_000,
+        { id: "deepseek-v4-flash", provider: "opencode-go" },
+      );
+
+      await runCommand(commands, "budget", "300K", opencodeGo.ctx);
+
+      expect(opencodeGo.notifyCalls[opencodeGo.notifyCalls.length - 1]).toEqual({
+        message: "Context budget can only be changed in DeepSeek mode.",
+        type: "warning",
+      });
+    });
+  });
+});
+
+describe("deepseek-cost input model switch", () => {
+  test("input /model schedules deferred initialization after model changes", async () => {
+    await withTemporaryHome(async () => {
+      const { handlers } = mountExtension();
+      const { ctx, timers, widgetCalls } = extensionContext(
+        225_000,
+        { id: "claude-sonnet", provider: "anthropic" },
+      );
+
+      fireWithPayload(handlers, "input", { text: "/model deepseek-v4-pro" }, ctx);
+
+      expect(timers.length).toBe(1);
+
+      // Simulate the built-in /model command completing after input.
+      ctx.model = { id: "deepseek-v4-pro", provider: "deepseek" };
+
+      await timers[0]();
+
+      const last = widgetCalls[widgetCalls.length - 1] ?? [];
+      expect(last[0]).toContain("(225.0K/450.0K)");
+    });
+  });
+
+  test("input /model keeps polling while the model has not changed yet", async () => {
+    await withTemporaryHome(async () => {
+      const { handlers } = mountExtension();
+      const { ctx, timers, widgetCalls } = extensionContext(
+        225_000,
+        { id: "claude-sonnet", provider: "anthropic" },
+      );
+
+      fireWithPayload(handlers, "input", { text: "/model deepseek-v4-pro" }, ctx);
+
+      expect(timers.length).toBe(1);
+
+      await timers[0]();
+
+      expect(timers.length).toBe(2);
+      expect(widgetCalls.length).toBe(0);
+    });
+  });
+
+  test("input normal message does not schedule deferred initialization", () => {
+    const { handlers } = mountExtension();
+    const { ctx, timers } = extensionContext(
+      0,
+      { id: "deepseek-v4-pro", provider: "deepseek" },
+    );
+
+    fireWithPayload(handlers, "input", { text: "hello" }, ctx);
+
+    expect(timers.length).toBe(0);
   });
 });
