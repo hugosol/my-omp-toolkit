@@ -1,5 +1,5 @@
 /**
- * Model mode classification for the DeepSeek Cost Tracker.
+ * Model mode classification for the Model Cost Tracker.
  *
  * The extension has three visible modes plus an inactive state:
  * - "deepseek": official DeepSeek provider with a known DeepSeek model; uses RMB billing.

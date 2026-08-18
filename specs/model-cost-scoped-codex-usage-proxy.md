@@ -1,10 +1,10 @@
-# Scoped Codex Usage Proxy for DeepSeek Cost Extension
+# Scoped Codex Usage Proxy for Model Cost Extension
 
 Status: `ready-for-agent`
 
 ## Problem Statement
 
-在 ChatGPT/Codex 模式下，DeepSeek Cost Tracker 应显示当前周额度使用百分比和重置时间。当前 extension 通过 OMP 的聚合用量接口获取这些数据，但该接口使用裸 `fetch`，不会应用模型主请求已经使用的 `PI_PROXY_OPENAI_CODEX` provider proxy。
+在 ChatGPT/Codex 模式下，Model Cost Tracker 应显示当前周额度使用百分比和重置时间。当前 extension 通过 OMP 的聚合用量接口获取这些数据，但该接口使用裸 `fetch`，不会应用模型主请求已经使用的 `PI_PROXY_OPENAI_CODEX` provider proxy。
 
 对于必须通过本地代理访问 ChatGPT 官方域名的用户，模型对话可以正常工作，但 `/wham/usage` 请求会直连并超时。OMP 将失败折叠为空用量报告，extension 随后静默省略周额度组件。设置进程全局 `HTTPS_PROXY` 可以恢复显示，但会影响 OMP 进程内其他 provider、扩展和网络请求，作用域过大。
 
@@ -12,7 +12,7 @@ OpenAI 官方产品资料确认额外周限额可能存在，但没有把 `prima
 
 ## Solution
 
-DeepSeek Cost Tracker 将在 extension 内建立一条仅用于 Codex usage provider 的 scoped proxy 调用链。它复用 OMP 的公开 OAuth access、Codex usage provider、响应规范化和 provider proxy 工具，不修改进程全局代理环境，也不复制 OpenAI backend payload parser。
+Model Cost Tracker 将在 extension 内建立一条仅用于 Codex usage provider 的 scoped proxy 调用链。它复用 OMP 的公开 OAuth access、Codex usage provider、响应规范化和 provider proxy 工具，不修改进程全局代理环境，也不复制 OpenAI backend payload parser。
 
 extension 将从 `PI_PROXY_OPENAI_CODEX` 读取代理，缺失时回退到 `PI_PROXY`。代理只注入本次 Codex usage provider 调用及该 provider 触发的 ChatGPT 辅助请求。缺少代理、请求失败、版本不兼容或报告缺少周窗口时，周额度组件保持可见并展示确定的状态或错误摘要。
 

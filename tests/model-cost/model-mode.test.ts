@@ -3,7 +3,7 @@ import {
   classifyModelMode,
   isDeepSeekModel,
   isTokenOnlyDeepSeekModel,
-} from "../../extensions/deepseek-cost/model-mode";
+} from "../../extensions/model-cost/model-mode";
 
 describe("classifyModelMode", () => {
   test("classifies official DeepSeek provider with known DeepSeek model as deepseek", () => {

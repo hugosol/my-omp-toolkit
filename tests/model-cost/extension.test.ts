@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import deepseekCost from "../../extensions/deepseek-cost/index";
-import { __setOmpModuleLoaderForTest } from "../../extensions/deepseek-cost/chatgpt-usage";
+import modelCost from "../../extensions/model-cost/index";
+import { __setOmpModuleLoaderForTest } from "../../extensions/model-cost/chatgpt-usage";
 
 type EventHandler = (event: unknown, ctx: unknown) => unknown;
 type CommandHandler = (args: string, ctx: unknown) => unknown;
@@ -21,7 +21,7 @@ function mountExtension() {
       handlers.set(event, handler);
     },
   };
-  deepseekCost(api as Parameters<typeof deepseekCost>[0]);
+  modelCost(api as Parameters<typeof modelCost>[0]);
   return { commands, handlers };
 }
 
@@ -215,7 +215,7 @@ function renderLastWidget(
 async function withTemporaryHome<T>(run: () => T | Promise<T>): Promise<T> {
   const originalHome = process.env.HOME;
   const originalUserProfile = process.env.USERPROFILE;
-  const temporaryHome = fs.mkdtempSync(path.join(os.tmpdir(), "deepseek-cost-extension-test-"));
+  const temporaryHome = fs.mkdtempSync(path.join(os.tmpdir(), "model-cost-extension-test-"));
   process.env.HOME = temporaryHome;
   process.env.USERPROFILE = temporaryHome;
   try {
@@ -235,7 +235,7 @@ async function flushPromises(): Promise<void> {
   }
 }
 
-describe("deepseek-cost extension", () => {
+describe("model-cost extension", () => {
   test("ChatGPT mode renders a fixed 272K context budget", () => {
     const { handlers } = mountExtension();
     const { ctx, widgetCalls } = extensionContext(136_000);
@@ -398,7 +398,7 @@ describe("deepseek-cost extension", () => {
   });
 });
 
-describe("deepseek-cost Codex usage lifecycle", () => {
+describe("model-cost Codex usage lifecycle", () => {
   test("session_start starts one refresh and renders loading first", async () => {
     let calls = 0;
     installFakeCodexModules({
@@ -557,7 +557,7 @@ describe("deepseek-cost Codex usage lifecycle", () => {
   });
 });
 
-describe("deepseek-cost weekly pacing widget", () => {
+describe("model-cost weekly pacing widget", () => {
   test("renders combined pacing bar through the component factory", async () => {
     process.env.PI_PROXY = "http://generic-proxy";
     installFakeCodexModules({ fetchUsage: async () => weeklyReport(60) });
@@ -640,7 +640,7 @@ describe("deepseek-cost weekly pacing widget", () => {
   });
 });
 
-describe("deepseek-cost token-only mode", () => {
+describe("model-cost token-only mode", () => {
   test("opencode-go deepseek-v4-* renders token-only without RMB/balance/daily", async () => {
     await withTemporaryHome(() => {
       const { handlers } = mountExtension();
@@ -676,7 +676,7 @@ describe("deepseek-cost token-only mode", () => {
   });
 });
 
-describe("deepseek-cost provider-gated billing", () => {
+describe("model-cost provider-gated billing", () => {
   test("opencode-go deepseek-v4-* does not accumulate RMB cost or daily spend", async () => {
     await withTemporaryHome(async () => {
       const { handlers } = mountExtension();
@@ -700,7 +700,7 @@ describe("deepseek-cost provider-gated billing", () => {
   });
 });
 
-describe("deepseek-cost budget provider gate", () => {
+describe("model-cost budget provider gate", () => {
   test("opencode-go deepseek-v4-* rejects budget overrides", async () => {
     await withTemporaryHome(async () => {
       const { commands } = mountExtension();
@@ -719,7 +719,7 @@ describe("deepseek-cost budget provider gate", () => {
   });
 });
 
-describe("deepseek-cost input dual fetch", () => {
+describe("model-cost input dual fetch", () => {
   test("/model input fetches DeepSeek balance and Codex usage when cache is empty", async () => {
     let deepSeekCalls = 0;
     let codexCalls = 0;
@@ -871,7 +871,7 @@ describe("deepseek-cost input dual fetch", () => {
   });
 });
 
-describe("deepseek-cost start refresh cache", () => {
+describe("model-cost start refresh cache", () => {
   test("agent_start DeepSeek skips balance fetch when cache is fresh", async () => {
     let deepSeekCalls = 0;
     const originalFetch = globalThis.fetch;
@@ -919,7 +919,7 @@ describe("deepseek-cost start refresh cache", () => {
   });
 });
 
-describe("deepseek-cost agent_end force refresh cache", () => {
+describe("model-cost agent_end force refresh cache", () => {
   test("agent_end DeepSeek refreshes balance and updates cache", async () => {
     await withTemporaryHome(async () => {
       let deepSeekCalls = 0;

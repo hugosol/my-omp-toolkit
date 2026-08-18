@@ -1,5 +1,5 @@
 /**
- * DeepSeek Cost Tracker — Session-level token usage and cost display.
+ * Model Cost Tracker — Session-level token usage and cost display.
  *
  * Shows cumulative and per-turn cost in the widget area with an inline
  * progress bar tracking context usage against a display-only budget. DeepSeek
@@ -54,7 +54,7 @@ import { fetchChatGPTUsage, isOpenAICodexModel, buildWeeklyUsagePart, parseChatG
 // Constants
 // ============================================================================
 
-const WIDGET_KEY = "z-deepseek-cost";
+const WIDGET_KEY = "z-model-cost";
 const BALANCE_PROVIDER = "deepseek";
 const BAR_WIDTH = 20;
 const CHATGPT_BUDGET = 272_000;
@@ -323,8 +323,8 @@ function refresh(
 // Extension entry point
 // ============================================================================
 
-export default function deepseekCost(pi: ExtensionAPI): void {
-  pi.setLabel("DeepSeek Cost Tracker");
+export default function modelCost(pi: ExtensionAPI): void {
+  pi.setLabel("Model Cost Tracker");
 
   const state = createTrackerState();
   const daily = createDailyTracker();

@@ -1,4 +1,4 @@
-# DeepSeek Cost Tracker
+# Model Cost Tracker
 
 Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显示实时费用、预算进度条和每日累积花费。
 

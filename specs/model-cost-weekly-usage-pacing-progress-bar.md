@@ -1,10 +1,10 @@
-# Weekly Usage Pacing Progress Bar for DeepSeek Cost Tracker
+# Weekly Usage Pacing Progress Bar for Model Cost Tracker
 
 Status: `ready-for-agent`
 
 ## Problem Statement
 
-DeepSeek Cost Tracker 当前在 ChatGPT/Codex 模式下显示 `7d N%`、重置倒计时和绝对重置时间，但用户仍需自行推算七天周期已经过去多少比例，才能判断当前周额度消耗是否快于时间进度。
+Model Cost Tracker 当前在 ChatGPT/Codex 模式下显示 `7d N%`、重置倒计时和绝对重置时间，但用户仍需自行推算七天周期已经过去多少比例，才能判断当前周额度消耗是否快于时间进度。
 
 单独看到额度已使用百分比无法回答“当前用量是否超前、超前多少”这一核心问题。用户必须从重置时间倒推周期开始时间，再把当前时刻换算成七天周期百分比；这在终端中既不直观，也难以持续准确比较。现有显示还没有一种同时依靠位置、线条粗细、刻度和颜色表达额度节奏的视觉语言。
 
@@ -70,7 +70,7 @@ DeepSeek Cost Tracker 当前在 ChatGPT/Codex 模式下显示 `7d N%`、重置�
 40. As a Codex user whose quota percentage is unavailable, I do not want a fabricated empty bar, so that missing usage is not interpreted as zero usage.
 41. As a Codex user receiving an over-100 percentage, I want the graphic clamped to full while the original number remains visible, so that the track stays bounded without hiding reported overage.
 42. As a Codex user near a color threshold, I want color classification based on raw values rather than rounded labels, so that display rounding cannot change pacing status.
-43. As an existing DeepSeek Cost Tracker user, I want the context-budget bar and cost lines to remain unchanged, so that the feature only enhances weekly Codex usage.
+43. As an existing Model Cost Tracker user, I want the context-budget bar and cost lines to remain unchanged, so that the feature only enhances weekly Codex usage.
 44. As an extension maintainer, I want the implementation confined to the extension and public OMP APIs, so that OMP core does not gain feature-specific behavior.
 45. As an extension maintainer, I want width calculations to use terminal display width rather than JavaScript string length, so that ANSI styling and wide characters do not break fallback decisions.
 46. As an extension maintainer, I want deterministic rendering under a controlled clock and theme, so that pacing behavior can be tested without real accounts, network access, or waiting for time to pass.
@@ -111,7 +111,7 @@ DeepSeek Cost Tracker 当前在 ChatGPT/Codex 模式下显示 `7d N%`、重置�
 
 ## Testing Decisions
 
-- The primary acceptance seam is the existing mounted-extension harness: register the real DeepSeek Cost Tracker against a fake ExtensionAPI, drive its real lifecycle and provider-response events, capture the widget component factory, and render the resulting component at controlled widths with a controlled theme and clock. This is the highest existing seam that covers data ingestion, state transitions, theme selection, width fallback, line composition, and observable terminal output in one place.
+- The primary acceptance seam is the existing mounted-extension harness: register the real Model Cost Tracker against a fake ExtensionAPI, drive its real lifecycle and provider-response events, capture the widget component factory, and render the resulting component at controlled widths with a controlled theme and clock. This is the highest existing seam that covers data ingestion, state transitions, theme selection, width fallback, line composition, and observable terminal output in one place.
 - No production-only testing API should be added. Existing fake OMP module loading, fake provider/header reports, lifecycle event capture, and controlled clock facilities should supply the necessary inputs.
 - Tests must assert externally visible behavior rather than private helper names, call graphs, or intermediate arrays. A good test should fail if a plausible regression swaps quota/time semantics, changes a threshold boundary, inserts the marker instead of overlaying it, colors the time reference, adds a timer/request, wraps the line, or drops precise values during width fallback.
 - Theme tests should use distinguishable fake semantic formatters and assert that only heavy quota glyphs and the quota number receive normal/success/warning/error/muted status styling. Thin glyphs, `│`, `/`, the time number, and reset text must remain default text.
@@ -157,5 +157,5 @@ DeepSeek Cost Tracker 当前在 ChatGPT/Codex 模式下显示 `7d N%`、重置�
 - Codebase-memory analysis confirms that the current weekly usage flow already normalizes both active usage reports and Codex response headers into the same ChatGPT usage state before the widget refreshes.
 - The current selector accepts main-chat windows within ±5% of seven days, but the extension state intentionally discards the reported duration. This feature uses the explicitly agreed fixed-seven-day calculation rather than expanding state to preserve actual duration.
 - OMP exposes component factories, semantic themes, managed redraw behavior, and ANSI-aware width utilities, but no public progress-bar or time-marker component. The combined track therefore belongs in the extension renderer while remaining on public APIs.
-- The repository contains no domain glossary or applicable ADR for this area. Terminology follows the existing DeepSeek Cost Tracker README, Codex usage research, and scoped usage-proxy specification.
+- The repository contains no domain glossary or applicable ADR for this area. Terminology follows the existing Model Cost Tracker README, Codex usage research, and scoped usage-proxy specification.
 - This document is published locally with `ready-for-agent` status, as requested, rather than creating an issue-tracker item.

@@ -4,7 +4,7 @@ import {
   createBalanceCache,
   isCacheFresh,
   setCacheEntry,
-} from "../../extensions/deepseek-cost/balance-cache";
+} from "../../extensions/model-cost/balance-cache";
 
 describe("isCacheFresh", () => {
   test("is false when never fetched", () => {

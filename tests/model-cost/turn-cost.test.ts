@@ -4,7 +4,7 @@ import {
   anchorRequest,
   addMessageCost,
   finishTurn,
-} from "../../extensions/deepseek-cost/turn-cost";
+} from "../../extensions/model-cost/turn-cost";
 
 const PRO_PEAK = { input: 9, cacheRead: 0.3, output: 27 };
 const FLASH_OFF_PEAK = { input: 1.5, cacheRead: 0.05, output: 4.5 };

@@ -15,7 +15,7 @@ import {
   cacheInOutWriteRatio,
   buildChatGPTStatusLine,
   buildChatGPTTokenLine,
-} from "../../extensions/deepseek-cost/cost-calc";
+} from "../../extensions/model-cost/cost-calc";
 
 const PRO_PEAK = { input: 9, cacheRead: 0.3, output: 27 };
 const PRO_OFF_PEAK = { input: 4.5, cacheRead: 0.15, output: 13.5 };

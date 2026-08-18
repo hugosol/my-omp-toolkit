@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { buildSegmentBar } from "../../extensions/deepseek-cost/segment-bar";
-import type { DailySession } from "../../extensions/deepseek-cost/daily-tracker";
+import { buildSegmentBar } from "../../extensions/model-cost/segment-bar";
+import type { DailySession } from "../../extensions/model-cost/daily-tracker";
 
 // Minimal theme stub — just wraps text with color name for assertion
 const theme = {

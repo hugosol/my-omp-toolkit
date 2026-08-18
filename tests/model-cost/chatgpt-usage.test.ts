@@ -9,7 +9,7 @@ import {
   formatErrorText,
   visibleDisplayWidth,
   __setOmpModuleLoaderForTest,
-} from "../../extensions/deepseek-cost/chatgpt-usage";
+} from "../../extensions/model-cost/chatgpt-usage";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;

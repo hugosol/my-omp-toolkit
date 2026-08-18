@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:tes
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createDailyTracker, type DailyTracker, type DailyData } from "../../extensions/deepseek-cost/daily-tracker";
+import { createDailyTracker, type DailyTracker, type DailyData } from "../../extensions/model-cost/daily-tracker";
 
 // We override HOME to point at a temp directory so tests don't touch real data.
 const originalHome = os.homedir();
