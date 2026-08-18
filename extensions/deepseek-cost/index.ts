@@ -407,7 +407,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 
   /**
    * After a typed `/model` command the built-in handler runs asynchronously.
-   * Poll briefly (50ms intervals, up to 1s) until the session model actually
+   * Poll briefly (500ms intervals, up to 5s) until the session model actually
    * changes, then run the same initialization as agent_start.
    */
   function scheduleModelSwitchInit(ctx: ExtensionContext, before: string): void {
@@ -416,14 +416,14 @@ export default function deepseekCost(pi: ExtensionAPI): void {
     const check = () => {
       modelSwitchTimer = undefined;
       const current = modelSignature(ctx.model);
-      if (current !== before || attempts >= 20) {
+      if (current !== before || attempts >= 10) {
         void initializeForModel(ctx);
         return;
       }
       attempts += 1;
-      modelSwitchTimer = ctx.setTimeout(check, 50);
+      modelSwitchTimer = ctx.setTimeout(check, 500);
     };
-    modelSwitchTimer = ctx.setTimeout(check, 50);
+    modelSwitchTimer = ctx.setTimeout(check, 500);
   }
 
   // ── Input: detect typed /model switches and run the same initialization ──
