@@ -140,6 +140,10 @@ function extensionContext(
       }),
     },
     getContextUsage: () => ({ tokens }),
+    modelRegistry: {
+      resolver: () => undefined,
+      getProviderBaseUrl: () => undefined,
+    },
     ui: {
       theme: { fg: (_color: string, text: string) => text },
       setWidget: (_key: string, content: unknown) => {
@@ -222,6 +226,12 @@ async function withTemporaryHome<T>(run: () => T | Promise<T>): Promise<T> {
     if (originalUserProfile === undefined) delete process.env.USERPROFILE;
     else process.env.USERPROFILE = originalUserProfile;
     fs.rmSync(temporaryHome, { recursive: true, force: true });
+  }
+}
+
+async function flushPromises(): Promise<void> {
+  for (let i = 0; i < 50; i += 1) {
+    await Promise.resolve();
   }
 }
 
@@ -709,57 +719,269 @@ describe("deepseek-cost budget provider gate", () => {
   });
 });
 
-describe("deepseek-cost input model switch", () => {
-  test("input /model schedules deferred initialization after model changes", async () => {
-    await withTemporaryHome(async () => {
+describe("deepseek-cost input dual fetch", () => {
+  test("/model input fetches DeepSeek balance and Codex usage when cache is empty", async () => {
+    let deepSeekCalls = 0;
+    let codexCalls = 0;
+    installFakeCodexModules({
+      fetchUsage: async () => {
+        codexCalls += 1;
+        return weeklyReport();
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      deepSeekCalls += 1;
+      return new Response(JSON.stringify({
+        balance_infos: [{ currency: "CNY", total_balance: "12.34" }],
+      }));
+    };
+    try {
       const { handlers } = mountExtension();
-      const { ctx, timers, widgetCalls } = extensionContext(
-        225_000,
-        { id: "claude-sonnet", provider: "anthropic" },
-      );
+      const { ctx } = codexContext();
+      ctx.model = { id: "claude-sonnet", provider: "anthropic" };
+      ctx.modelRegistry = {
+        ...ctx.modelRegistry,
+        resolver: () => async () => "key",
+        getProviderBaseUrl: () => "https://api.deepseek.com",
+      };
 
       fireWithPayload(handlers, "input", { text: "/model deepseek-v4-pro" }, ctx);
+      await flushPromises();
 
-      expect(timers.length).toBe(1);
-
-      // Simulate the built-in /model command completing after input.
-      ctx.model = { id: "deepseek-v4-pro", provider: "deepseek" };
-
-      await timers[0]();
-
-      const last = widgetCalls[widgetCalls.length - 1] ?? [];
-      expect(last[0]).toContain("(225.0K/450.0K)");
-    });
+      expect(deepSeekCalls).toBe(1);
+      expect(codexCalls).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
-  test("input /model keeps polling while the model has not changed yet", async () => {
-    await withTemporaryHome(async () => {
+  test("/models and /switch also trigger dual fetch", async () => {
+    for (const command of ["/models deepseek-v4-pro", "/switch"]) {
+      let deepSeekCalls = 0;
+      let codexCalls = 0;
+      installFakeCodexModules({
+        fetchUsage: async () => {
+          codexCalls += 1;
+          return weeklyReport();
+        },
+      });
+      process.env.PI_PROXY = "http://generic-proxy";
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async () => {
+        deepSeekCalls += 1;
+        return new Response(JSON.stringify({
+          balance_infos: [{ currency: "CNY", total_balance: "12.34" }],
+        }));
+      };
+      try {
+        const { handlers } = mountExtension();
+        const { ctx } = codexContext();
+        ctx.model = { id: "claude-sonnet", provider: "anthropic" };
+        ctx.modelRegistry = {
+          ...ctx.modelRegistry,
+          resolver: () => async () => "key",
+          getProviderBaseUrl: () => "https://api.deepseek.com",
+        };
+
+        fireWithPayload(handlers, "input", { text: command }, ctx);
+        await flushPromises();
+
+        expect(deepSeekCalls).toBe(1);
+        expect(codexCalls).toBe(1);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    }
+  });
+
+  test("normal input does not fetch either source", async () => {
+    let deepSeekCalls = 0;
+    let codexCalls = 0;
+    installFakeCodexModules({
+      fetchUsage: async () => {
+        codexCalls += 1;
+        return weeklyReport();
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      deepSeekCalls += 1;
+      return new Response("{}");
+    };
+    try {
       const { handlers } = mountExtension();
-      const { ctx, timers, widgetCalls } = extensionContext(
-        225_000,
-        { id: "claude-sonnet", provider: "anthropic" },
-      );
+      const { ctx } = codexContext();
+      ctx.model = { id: "claude-sonnet", provider: "anthropic" };
+      ctx.modelRegistry = {
+        ...ctx.modelRegistry,
+        resolver: () => async () => "key",
+        getProviderBaseUrl: () => "https://api.deepseek.com",
+      };
+
+      fireWithPayload(handlers, "input", { text: "hello" }, ctx);
+      await flushPromises();
+
+      expect(deepSeekCalls).toBe(0);
+      expect(codexCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("second /model input within TTL does not refetch", async () => {
+    let deepSeekCalls = 0;
+    let codexCalls = 0;
+    installFakeCodexModules({
+      fetchUsage: async () => {
+        codexCalls += 1;
+        return weeklyReport();
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      deepSeekCalls += 1;
+      return new Response(JSON.stringify({
+        balance_infos: [{ currency: "CNY", total_balance: "12.34" }],
+      }));
+    };
+    try {
+      const { handlers } = mountExtension();
+      const { ctx } = codexContext();
+      ctx.model = { id: "claude-sonnet", provider: "anthropic" };
+      ctx.modelRegistry = {
+        ...ctx.modelRegistry,
+        resolver: () => async () => "key",
+        getProviderBaseUrl: () => "https://api.deepseek.com",
+      };
 
       fireWithPayload(handlers, "input", { text: "/model deepseek-v4-pro" }, ctx);
+      await flushPromises();
+      fireWithPayload(handlers, "input", { text: "/model deepseek-v4-flash" }, ctx);
+      await flushPromises();
 
-      expect(timers.length).toBe(1);
+      expect(deepSeekCalls).toBe(1);
+      expect(codexCalls).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
 
-      await timers[0]();
+describe("deepseek-cost start refresh cache", () => {
+  test("agent_start DeepSeek skips balance fetch when cache is fresh", async () => {
+    let deepSeekCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      deepSeekCalls += 1;
+      return new Response(JSON.stringify({
+        balance_infos: [{ currency: "CNY", total_balance: "12.34" }],
+      }));
+    };
+    try {
+      const { handlers } = mountExtension();
+      const { ctx } = extensionContext(0, { id: "deepseek-v4-pro", provider: "deepseek" });
+      ctx.modelRegistry = {
+        resolver: () => async () => "key",
+        getProviderBaseUrl: () => "https://api.deepseek.com",
+      };
 
-      expect(timers.length).toBe(2);
-      expect(widgetCalls.length).toBe(0);
-    });
+      await fire(handlers, "agent_start", ctx);
+      expect(deepSeekCalls).toBe(1);
+
+      await fire(handlers, "agent_start", ctx);
+      expect(deepSeekCalls).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
-  test("input normal message does not schedule deferred initialization", () => {
+  test("agent_start Codex skips usage fetch when cache is fresh", async () => {
+    let codexCalls = 0;
+    installFakeCodexModules({
+      fetchUsage: async () => {
+        codexCalls += 1;
+        return weeklyReport();
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
     const { handlers } = mountExtension();
-    const { ctx, timers } = extensionContext(
-      0,
-      { id: "deepseek-v4-pro", provider: "deepseek" },
-    );
+    const { ctx } = codexContext();
 
-    fireWithPayload(handlers, "input", { text: "hello" }, ctx);
+    await fire(handlers, "agent_start", ctx);
+    expect(codexCalls).toBe(1);
 
-    expect(timers.length).toBe(0);
+    await fire(handlers, "agent_start", ctx);
+    expect(codexCalls).toBe(1);
+  });
+});
+
+describe("deepseek-cost agent_end force refresh cache", () => {
+  test("agent_end DeepSeek refreshes balance and updates cache", async () => {
+    await withTemporaryHome(async () => {
+      let deepSeekCalls = 0;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async () => {
+        deepSeekCalls += 1;
+        return new Response(JSON.stringify({
+          balance_infos: [{ currency: "CNY", total_balance: "12.34" }],
+        }));
+      };
+      const originalNow = Date.now;
+      Date.now = () => 1_000_000_000_000;
+      try {
+        const { handlers } = mountExtension();
+        const { ctx } = extensionContext(0, { id: "deepseek-v4-pro", provider: "deepseek" });
+        ctx.modelRegistry = {
+          resolver: () => async () => "key",
+          getProviderBaseUrl: () => "https://api.deepseek.com",
+        };
+
+        await fire(handlers, "agent_start", ctx);
+        expect(deepSeekCalls).toBe(1);
+
+        Date.now = () => 1_000_000_000_000 + 31_000;
+        await fire(handlers, "agent_end", ctx);
+        expect(deepSeekCalls).toBe(2);
+
+        await fire(handlers, "agent_start", ctx);
+        expect(deepSeekCalls).toBe(2);
+      } finally {
+        Date.now = originalNow;
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  test("agent_end Codex refreshes usage and updates cache", async () => {
+    let codexCalls = 0;
+    installFakeCodexModules({
+      fetchUsage: async () => {
+        codexCalls += 1;
+        return weeklyReport();
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const originalNow = Date.now;
+    Date.now = () => 1_000_000_000_000;
+    try {
+      const { handlers } = mountExtension();
+      const { ctx } = codexContext();
+
+      await fire(handlers, "agent_start", ctx);
+      expect(codexCalls).toBe(1);
+
+      Date.now = () => 1_000_000_000_000 + 31_000;
+      await fire(handlers, "agent_end", ctx);
+      expect(codexCalls).toBe(2);
+
+      await fire(handlers, "agent_start", ctx);
+      expect(codexCalls).toBe(2);
+    } finally {
+      Date.now = originalNow;
+    }
   });
 });

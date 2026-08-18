@@ -11,6 +11,7 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 - **分段进度条** — 可视化每个 session 的费用占比，支持精细模式（≤ ¥20）和粗模式（> ¥20）
 - **余额查询** — 自动查询 DeepSeek 账户余额
 - **Token-only 模式** — 当 `deepseek-v4-*` 模型经由其它 provider（如 opencode-go）提供时，只显示上下文进度条和 token 统计，不使用 RMB 计费、余额或每日累计
+- **双数据源 TTL 缓存** — 输入 `/model`、`/models`、`/switch` 时预取 DeepSeek 余额和 Codex 周额度，30 秒内不重复请求；UI 仍按当前模型展示对应缓存值
 - **ChatGPT/Codex 周额度节奏条** — 当当前模型为 `openai-codex` OAuth 模型时，用 20 格单轴进度条同时编码已用额度和七天周期时间进度，显示 `quota% / time%`、重置倒计时和绝对时间
 - **ChatGPT/Codex 费用** — 使用 OMP catalog 中的动态 USD 价格计算 CacheRead/In/CacheWrite/Out 四路比例、Total/Turn 估计费用；不显示 DeepSeek 余额和每日累计
 
@@ -40,7 +41,7 @@ DeepSeek 费用分支仅在 provider 为 `deepseek` 且模型 ID 命中以上两
 - 周额度数据通过 OMP 公开的 `openaiCodexUsageProvider.fetchUsage` 获取，并在扩展内使用 `PI_PROXY_OPENAI_CODEX`（缺失时回退 `PI_PROXY`）建立 request-scoped 代理；不修改进程全局 `HTTPS_PROXY`。
 - 通过 `after_provider_response` 复用 OMP 公开的 Codex rate-limit header parser，并和主动用量接口共用同一套“按报告时长识别 7 天窗口”的选择规则（primary/secondary 均可）。
 - 首次加载显示 `7d … · 正在获取`；代理缺失、认证失败、传输失败、OMP 版本不兼容都只在 widget 内展示错误摘要，不弹通知。
-- 主动用量刷新为 single-flight：`session_start` 发起首次刷新，每个 Codex `agent_start` / `agent_end` 都会刷新一次，`/model` 切换也会触发；重叠触发共享同一个 in-flight 请求。
+- 主动用量刷新为 single-flight：`/model`、`/models`、`/switch` 输入时按 30s TTL 预取 DeepSeek 余额和 Codex 周额度；`agent_start` / `session_start` 只在当前模型对应缓存缺失或过期时拉取；`agent_end` 强制刷新当前模型对应值。
 
 周额度节奏条使用固定七天模型：周期起点为报告重置时间减去恰好 7 天，`time%` 由当前渲染时刻计算。额度相对时间的超前百分点决定粗线和额度数字的语义颜色：落后或持平用 `text`，0–15 个百分点用 `success`，15–30 用 `warning`，超过 30 用 `error`；无法取得有效重置时间时整条额度使用 `muted` 并显示 `quota% / --`。时间未知、已过期、超过七天无效分别显示 `reset unknown`、`reset expired (<local>)`、`reset invalid (<local>)`。窄终端按顺序移除 20 格条、绝对重置时间、重置倒计时，最后保留 `7d quota% / time%`，仍放不下时才做 ANSI-aware 右截断；整段始终单行。渲染不新增定时器、不发起额外额度请求。
 
@@ -80,6 +81,7 @@ token 增量仍在 `agent_end` 用累计值计算，用于更新 `totalTokens` �
 ```
 index.ts           入口：事件注册 + 命令处理 + 统一初始化 + UI 刷新（DeepSeek / Codex / token-only）
 model-mode.ts       纯函数：模型模式分类（deepseek / codex / token-only / hidden）
+balance-cache.ts    纯内存 TTL 缓存：DeepSeek 余额 + Codex 周额度
 tracker-state.ts   TrackerState 类型 + 工厂函数（含 ChatGPT 周额度状态）
 cost-calc.ts       纯函数：DeepSeek 价格解析、ChatGPT USD 费用、token 格式化、状态行构建
 turn-cost.ts       单回合 per-request 费用累计器（DeepSeek）
@@ -90,4 +92,4 @@ chatgpt-usage.ts   ChatGPT/Codex 周额度 scoped proxy 获取、响应头解析
 
 ## 技术细节
 
-纯扩展实现，通过 OMP Extension API 的 `session_start`、`agent_start`、`input`、`before_provider_request`、`message_end`、`agent_end` 等事件 hook 实现，不修改 OMP 源代码。`agent_start` 与 `/model` 切换共用同一个统一初始化函数；由于 `model_changed` 未暴露给扩展，`/model <id>` 通过 `input` 事件检测并在命令执行后延迟初始化。边界刷新使用 `ctx.setTimeout` 精确调度到下一个高峰/空闲边界。
+纯扩展实现，通过 OMP Extension API 的 `session_start`、`agent_start`、`input`、`before_provider_request`、`message_end`、`agent_end` 等事件 hook 实现，不修改 OMP 源代码。由于 `model_changed` 未暴露给扩展，`/model`、`/models`、`/switch` 通过 `input` 事件触发 DeepSeek 余额 + Codex 周额度的双数据源预取，并使用 30 秒纯内存 TTL 缓存；`agent_start` / `session_start` 只在当前模型对应缓存缺失或过期时拉取，`agent_end` 强制刷新当前模型对应值。边界刷新使用 `ctx.setTimeout` 精确调度到下一个高峰/空闲边界。

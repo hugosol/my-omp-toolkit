@@ -42,6 +42,12 @@ import { createDailyTracker, type DailyTracker } from "./daily-tracker";
 import { anchorRequest, addMessageCost, finishTurn } from "./turn-cost";
 import { buildSegmentBar } from "./segment-bar";
 import { classifyModelMode } from "./model-mode";
+import {
+  createBalanceCache,
+  isCacheFresh,
+  setCacheEntry,
+  type BalanceCache,
+} from "./balance-cache";
 import { fetchChatGPTUsage, isOpenAICodexModel, buildWeeklyUsagePart, parseChatGPTUsageHeaders, visibleDisplayWidth } from "./chatgpt-usage";
 
 // ============================================================================
@@ -322,8 +328,8 @@ export default function deepseekCost(pi: ExtensionAPI): void {
 
   const state = createTrackerState();
   const daily = createDailyTracker();
+  const balanceCache: BalanceCache = createBalanceCache();
   let boundaryTimer: Timer | undefined;
-  let modelSwitchTimer: Timer | undefined;
   let chatgptUsagePromise: Promise<ChatGPTUsageState> | null = null;
 
   function applyChatGPTUsageResult(ctx: ExtensionContext, result: ChatGPTUsageState): void {
@@ -342,6 +348,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
     } else {
       state.chatgpt = result;
     }
+    setCacheEntry(balanceCache.codex, result);
     refresh(state, daily, pi, ctx);
   }
 
@@ -392,45 +399,44 @@ export default function deepseekCost(pi: ExtensionAPI): void {
     refresh(state, daily, pi, ctx);
 
     if (mode === "deepseek") {
-      state.balance = await fetchBalance(ctx);
+      if (isCacheFresh(balanceCache.deepSeek)) {
+        state.balance = balanceCache.deepSeek.value;
+      } else {
+        state.balance = await fetchBalance(ctx);
+        setCacheEntry(balanceCache.deepSeek, state.balance);
+      }
     } else if (mode === "codex") {
-      await startChatGPTUsageRefresh(ctx);
+      if (isCacheFresh(balanceCache.codex) && balanceCache.codex.value) {
+        state.chatgpt = balanceCache.codex.value;
+      } else {
+        await startChatGPTUsageRefresh(ctx);
+      }
     }
 
     refresh(state, daily, pi, ctx);
     scheduleBoundaryRefresh(ctx);
   }
 
-  function modelSignature(model: { provider?: string; id?: string } | undefined): string {
-    return model ? `${model.provider}/${model.id}` : "";
+  /** Fetch DeepSeek balance and Codex weekly usage together and cache both. */
+  async function refreshBoth(ctx: ExtensionContext): Promise<void> {
+    const [balance, usage] = await Promise.all([
+      fetchBalance(ctx),
+      fetchChatGPTUsage(ctx).catch(() => null),
+    ]);
+    setCacheEntry(balanceCache.deepSeek, balance);
+    state.balance = balance;
+    setCacheEntry(balanceCache.codex, usage);
+    if (usage) state.chatgpt = usage;
+    refresh(state, daily, pi, ctx);
   }
 
-  /**
-   * After a typed `/model` command the built-in handler runs asynchronously.
-   * Poll briefly (500ms intervals, up to 5s) until the session model actually
-   * changes, then run the same initialization as agent_start.
-   */
-  function scheduleModelSwitchInit(ctx: ExtensionContext, before: string): void {
-    if (modelSwitchTimer) ctx.clearTimer(modelSwitchTimer);
-    let attempts = 0;
-    const check = () => {
-      modelSwitchTimer = undefined;
-      const current = modelSignature(ctx.model);
-      if (current !== before || attempts >= 10) {
-        void initializeForModel(ctx);
-        return;
-      }
-      attempts += 1;
-      modelSwitchTimer = ctx.setTimeout(check, 500);
-    };
-    modelSwitchTimer = ctx.setTimeout(check, 500);
-  }
-
-  // ── Input: detect typed /model switches and run the same initialization ──
+  // ── Input: typed model commands prefetch both data sources with TTL ──
   pi.on("input", (event, ctx) => {
     const text = event.text?.trim() ?? "";
-    if (!/^\/models?\b/.test(text)) return;
-    scheduleModelSwitchInit(ctx, modelSignature(ctx.model));
+    if (!/^\/(model|models|switch)\b/.test(text)) return;
+    if (!isCacheFresh(balanceCache.deepSeek) || !isCacheFresh(balanceCache.codex)) {
+      void refreshBoth(ctx);
+    }
   });
 
   // ── /budget command ──
@@ -665,6 +671,7 @@ export default function deepseekCost(pi: ExtensionAPI): void {
       : null;
     state.previousTotal = cur;
     state.balance = await fetchBalance(ctx);
+    setCacheEntry(balanceCache.deepSeek, state.balance);
     refresh(state, daily, pi, ctx);
   });
 }
