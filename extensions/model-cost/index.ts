@@ -377,7 +377,13 @@ export default function modelCost(pi: ExtensionAPI): void {
   function scheduleBoundaryRefresh(ctx: ExtensionContext): void {
     if (boundaryTimer) ctx.clearTimer(boundaryTimer);
     const now = new Date();
-    const delay = Math.max(0, nextBoundary(now).getTime() - now.getTime());
+    // Peak intervals are inclusive at the end (12:00 and 18:00 are still peak).
+    // If we are exactly on such a boundary, wait 1ms so the icon can flip to
+    // off-peak instead of skipping straight to the next peak-start boundary.
+    const justAfter = new Date(now.getTime() + 1);
+    const delay = isPeakHour(now) && !isPeakHour(justAfter)
+      ? 1
+      : Math.max(1, nextBoundary(now).getTime() - now.getTime() + 1);
     boundaryTimer = ctx.setTimeout(() => {
       boundaryTimer = undefined;
       refresh(state, daily, pi, ctx);
@@ -386,10 +392,15 @@ export default function modelCost(pi: ExtensionAPI): void {
   }
 
   /**
-   * Unified per-model initialization. Called from session init, agent_start,
-   * and after a `/model` switch so every model starts with the same lifecycle.
+   * Unified per-model initialization. Called from session init and agent_start
+   * so every model starts with the same lifecycle.
    */
   async function initializeForModel(ctx: ExtensionContext): Promise<void> {
+    // Register the boundary timer before any async work so the icon refresh is
+    // armed as soon as a session/agent opens, even if balance/usage fetching is
+    // slow or fails later.
+    scheduleBoundaryRefresh(ctx);
+
     const mode = classifyModelMode(ctx.model);
 
     if (mode !== "deepseek") {
@@ -414,7 +425,6 @@ export default function modelCost(pi: ExtensionAPI): void {
     }
 
     refresh(state, daily, pi, ctx);
-    scheduleBoundaryRefresh(ctx);
   }
 
   /** Fetch DeepSeek balance and Codex weekly usage together and cache both. */
