@@ -3,6 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createDailyTracker, type DailyTracker, type DailyData } from "../../extensions/model-cost/daily-tracker";
+import { installInProcessFileLock } from "./test-lock";
+
+installInProcessFileLock();
 
 // We override HOME to point at a temp directory so tests don't touch real data.
 const originalHome = os.homedir();
@@ -52,7 +55,7 @@ describe("DailyTracker read / write", () => {
     expect(data.start).toBeTruthy();
   });
 
-  test("write then read roundtrips", () => {
+  test("write then read roundtrips", async () => {
     const t = freshTracker();
     const data: DailyData = {
       start: "2024-01-01T00:00:00.000Z",
@@ -69,7 +72,7 @@ describe("DailyTracker read / write", () => {
         },
       ],
     };
-    t.write(data);
+    await t.write(data);
 
     const read = t.read();
     expect(read.totalCost).toBe(12.5);
@@ -78,10 +81,10 @@ describe("DailyTracker read / write", () => {
     expect(read.sessions[0].id).toBe("s1");
   });
 
-  test("read normalizes missing fields from old files", () => {
+  test("read normalizes missing fields from old files", async () => {
     const t = freshTracker();
     // Write a partial record simulating an old file version
-    t.write({ start: "2024-01-01T00:00:00.000Z", totalCost: 5 } as DailyData);
+    await t.write({ start: "2024-01-01T00:00:00.000Z", totalCost: 5 } as DailyData);
 
     // Create a new tracker (cache cleared) to force disk re-read
     const t2 = createDailyTracker();
@@ -96,9 +99,9 @@ describe("DailyTracker read / write", () => {
 // ============================================================
 
 describe("DailyTracker ensureSession", () => {
-  test("creates a new session on first call", () => {
+  test("creates a new session on first call", async () => {
     const t = freshTracker();
-    const data = t.ensureSession("s1", "my session", { input: 100, cacheRead: 50, output: 20 });
+    const data = await t.ensureSession("s1", "my session", { input: 100, cacheRead: 50, output: 20 });
     expect(data.sessions).toHaveLength(1);
     expect(data.sessions[0].id).toBe("s1");
     expect(data.sessions[0].name).toBe("my session");
@@ -106,21 +109,21 @@ describe("DailyTracker ensureSession", () => {
     expect(data.sessions[0].cost).toBe(0);
   });
 
-  test("is idempotent — second call does not duplicate", () => {
+  test("is idempotent — second call does not duplicate", async () => {
     const t = freshTracker();
-    t.ensureSession("s1", "my session", { input: 100, cacheRead: 50, output: 20 });
-    t.ensureSession("s1", "my session", { input: 200, cacheRead: 60, output: 30 });
+    await t.ensureSession("s1", "my session", { input: 100, cacheRead: 50, output: 20 });
+    await t.ensureSession("s1", "my session", { input: 200, cacheRead: 60, output: 30 });
     const data = t.read();
     expect(data.sessions).toHaveLength(1);
     // lastKnown values are NOT updated on subsequent ensureSession calls
-    // (that's the caller's job via write)
+    // (that's recordTurnCost's job)
     expect(data.sessions[0].lastInput).toBe(100);
   });
 
-  test("tracks multiple sessions independently", () => {
+  test("tracks multiple sessions independently", async () => {
     const t = freshTracker();
-    t.ensureSession("s1", "session one", { input: 100, cacheRead: 0, output: 0 });
-    t.ensureSession("s2", "session two", { input: 200, cacheRead: 0, output: 0 });
+    await t.ensureSession("s1", "session one", { input: 100, cacheRead: 0, output: 0 });
+    await t.ensureSession("s2", "session two", { input: 200, cacheRead: 0, output: 0 });
     const data = t.read();
     expect(data.sessions).toHaveLength(2);
     expect(data.sessions.map(s => s.id).sort()).toEqual(["s1", "s2"]);
@@ -132,14 +135,14 @@ describe("DailyTracker ensureSession", () => {
 // ============================================================
 
 describe("DailyTracker archive", () => {
-  test("returns null when no data to archive", () => {
+  test("returns null when no data to archive", async () => {
     const t = freshTracker();
-    expect(t.archive(null)).toBeNull();
+    expect(await t.archive(null)).toBeNull();
   });
 
-  test("archives current data and resets to fresh", () => {
+  test("archives current data and resets to fresh", async () => {
     const t = freshTracker();
-    t.write({
+    await t.write({
       start: "2024-01-01T00:00:00.000Z",
       totalCost: 50,
       totalTokens: { input: 1000, cacheRead: 500, output: 200 },
@@ -148,7 +151,7 @@ describe("DailyTracker archive", () => {
       ],
     });
 
-    const archivePath = t.archive(123.45);
+    const archivePath = await t.archive(123.45);
     expect(archivePath).not.toBeNull();
     expect(archivePath!).toContain("deepseek-cost-");
 
@@ -168,9 +171,9 @@ describe("DailyTracker archive", () => {
     expect(fresh.start_bal).toBe(123.45);
   });
 
-  test("archive with null balance omits balance fields", () => {
+  test("archive with null balance omits balance fields", async () => {
     const t = freshTracker();
-    t.write({
+    await t.write({
       start: "2024-01-01T00:00:00.000Z",
       totalCost: 1,
       totalTokens: { input: 1, cacheRead: 0, output: 0 },
@@ -179,7 +182,7 @@ describe("DailyTracker archive", () => {
       ],
     });
 
-    const archivePath = t.archive(null);
+    const archivePath = await t.archive(null);
     const archived = JSON.parse(fs.readFileSync(archivePath!, "utf-8"));
     expect(archived.end_bal).toBeUndefined();
 

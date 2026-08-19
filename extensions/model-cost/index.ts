@@ -459,7 +459,7 @@ export default function modelCost(pi: ExtensionAPI): void {
       if (/^clear$/i.test(trimmed)) {
         const bal = await fetchBalance(ctx);
         state.balance = bal;
-        const archived = daily.archive(bal);
+        const archived = await daily.archive(bal);
         if (archived) {
           ctx.ui.notify(`Daily tracking archived → ${path.basename(archived)}`, "info");
         } else {
@@ -524,17 +524,26 @@ export default function modelCost(pi: ExtensionAPI): void {
     state.chatgpt = { kind: "idle", usedPercent: null, resetsAt: null, fetchedAt: null };
     finishTurn(state.turnCost);
 
+    // Kick off per-model init first so its synchronous preamble (boundary
+    // timer + first refresh) runs before any daily-archive lock wait below.
+    const modelInit = initializeForModel(ctx);
+
     if (classifyModelMode(ctx.model) === "deepseek") {
       const sessionId = ctx.sessionManager.getSessionId();
       const sessionName = ctx.sessionManager.getSessionName() ?? ctx.cwd ?? "";
-      daily.ensureSession(sessionId, sessionName, {
-        input: s.input,
-        cacheRead: s.cacheRead,
-        output: s.output,
-      });
+      try {
+        await daily.ensureSession(sessionId, sessionName, {
+          input: s.input,
+          cacheRead: s.cacheRead,
+          output: s.output,
+        });
+      } catch {
+        // A corrupt archive must not block session startup; display reads and
+        // later mutations handle the failure safely without overwriting data.
+      }
     }
 
-    await initializeForModel(ctx);
+    await modelInit;
   };
 
   pi.on("session_start", onInit);
@@ -629,37 +638,11 @@ export default function modelCost(pi: ExtensionAPI): void {
     const turnCost = finishTurn(state.turnCost);
 
     try {
-      const dailyData = daily.ensureSession(sessionId, sessionName, {
+      await daily.recordTurnCost(sessionId, sessionName, {
         input: stats.input,
         cacheRead: stats.cacheRead,
         output: stats.output,
-      });
-
-      const sess = dailyData.sessions.find(e => e.id === sessionId);
-      if (!sess) {
-        state.previousTotal = cur;
-        return;
-      }
-      const deltaInput = Math.max(0, stats.input - sess.lastInput);
-      const deltaCacheRead = Math.max(0, stats.cacheRead - sess.lastCacheRead);
-      const deltaOutput = Math.max(0, stats.output - sess.lastOutput);
-      const hasTokenDelta = deltaInput > 0 || deltaCacheRead > 0 || deltaOutput > 0;
-
-      if (hasTokenDelta || turnCost > 0) {
-        dailyData.totalCost += turnCost;
-        if (hasTokenDelta) {
-          dailyData.totalTokens.input += deltaInput;
-          dailyData.totalTokens.cacheRead += deltaCacheRead;
-          dailyData.totalTokens.output += deltaOutput;
-
-          sess.lastInput = stats.input;
-          sess.lastCacheRead = stats.cacheRead;
-          sess.lastOutput = stats.output;
-        }
-        sess.cost += turnCost;
-
-        daily.write(dailyData);
-      }
+      }, turnCost);
     } catch {
       // Daily tracking is best-effort; never block the widget.
     }

@@ -5,6 +5,9 @@ import * as path from "node:path";
 
 import modelCost from "../../extensions/model-cost/index";
 import { __setOmpModuleLoaderForTest } from "../../extensions/model-cost/chatgpt-usage";
+import { installInProcessFileLock } from "./test-lock";
+
+installInProcessFileLock();
 
 type EventHandler = (event: unknown, ctx: unknown) => unknown;
 type CommandHandler = (args: string, ctx: unknown) => unknown;
@@ -696,6 +699,92 @@ describe("model-cost provider-gated billing", () => {
 
       const dailyPath = path.join(process.env.HOME!, ".omp", "cost-archive", "deepseek-cost.json");
       expect(fs.existsSync(dailyPath)).toBe(false);
+    });
+  });
+});
+
+describe("model-cost concurrent DeepSeek CLIs", () => {
+  test("two extension instances both accrue into the shared daily archive", async () => {
+    await withTemporaryHome(async () => {
+      function mutableDeepSeekContext(sessionId: string) {
+        const stats = {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          orchestrationInput: 0,
+          orchestrationCacheRead: 0,
+          orchestrationOutput: 0,
+          totalTokens: 0,
+        };
+        const { ctx } = extensionContext(
+          0,
+          { id: "deepseek-v4-pro", provider: "deepseek" },
+        );
+        ctx.sessionManager.getSessionId = () => sessionId;
+        ctx.sessionManager.getSessionName = () => `cli ${sessionId}`;
+        ctx.sessionManager.getUsageStatistics = () => stats;
+        return { ctx, stats };
+      }
+
+      function chargeTurn(
+        handlers: Map<string, EventHandler>,
+        ctx: unknown,
+        usage: { input: number; output: number },
+      ) {
+        fireWithPayload(handlers, "before_provider_request", {}, ctx);
+        fireWithPayload(
+          handlers,
+          "message_end",
+          { message: { usage: { input: usage.input, cacheRead: 0, output: usage.output } } },
+          ctx,
+        );
+      }
+
+      const extA = mountExtension();
+      const extB = mountExtension();
+      const a = mutableDeepSeekContext("session-a");
+      const b = mutableDeepSeekContext("session-b");
+
+      await fire(extA.handlers, "session_start", a.ctx);
+      await fire(extB.handlers, "session_start", b.ctx);
+
+      // CLI A finishes a turn.
+      a.stats.input = 1_000_000;
+      a.stats.output = 50_000;
+      chargeTurn(extA.handlers, a.ctx, { input: 400_000, output: 50_000 });
+      await fire(extA.handlers, "agent_end", a.ctx);
+
+      // CLI B finishes a turn afterwards.
+      b.stats.input = 2_000_000;
+      b.stats.output = 100_000;
+      chargeTurn(extB.handlers, b.ctx, { input: 800_000, output: 100_000 });
+      await fire(extB.handlers, "agent_end", b.ctx);
+
+      // CLI A finishes a second turn.
+      a.stats.input = 1_200_000;
+      a.stats.output = 70_000;
+      chargeTurn(extA.handlers, a.ctx, { input: 200_000, output: 20_000 });
+      await fire(extA.handlers, "agent_end", a.ctx);
+
+      const dailyPath = path.join(process.env.HOME!, ".omp", "cost-archive", "deepseek-cost.json");
+      const data = JSON.parse(fs.readFileSync(dailyPath, "utf-8")) as {
+        totalCost: number;
+        totalTokens: { input: number; output: number };
+        sessions: Array<{ id: string; lastInput: number; lastOutput: number; cost: number }>;
+      };
+      expect(data.sessions).toHaveLength(2);
+      const aSess = data.sessions.find(s => s.id === "session-a");
+      const bSess = data.sessions.find(s => s.id === "session-b");
+      expect(aSess?.cost).toBeGreaterThan(0);
+      expect(bSess?.cost).toBeGreaterThan(0);
+      expect(data.totalCost).toBeCloseTo((aSess?.cost ?? 0) + (bSess?.cost ?? 0), 6);
+      expect(aSess?.lastInput).toBe(1_200_000);
+      expect(aSess?.lastOutput).toBe(70_000);
+      expect(bSess?.lastInput).toBe(2_000_000);
+      expect(bSess?.lastOutput).toBe(100_000);
+      expect(data.totalTokens.input).toBe(3_200_000);
+      expect(data.totalTokens.output).toBe(170_000);
     });
   });
 });

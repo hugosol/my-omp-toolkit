@@ -66,9 +66,19 @@ DeepSeek 费用分支仅在 provider 为 `deepseek` 且模型 ID 命中以上两
 - `lastInput` / `lastCacheRead` / `lastOutput` — 上次已知的累计值
 - `cost` — 该 session 累计花费
 
-token 增量仍在 `agent_end` 用累计值计算，用于更新 `totalTokens` 和 `last*`；费用则由回合内每次 API 请求的 `message_end` 按锚定价累加，`agent_end` 时把 `turnCost` 写入每日总花费和 session 花费。使用"上次已知值"而非"上一回合的 previousTotal"，确保 fork / resume 后不会重复计算 token。
+token 增量仍在 `agent_end` 用累计值计算，用于更新 `totalTokens` 和 `last*`；费用则由回合内每次 API 请求的 `message_end` 按锚定价累加，`agent_end` 时把 `turnCost` 通过 `daily-tracker` 的 `recordTurnCost` 写入每日总花费和 session 花费。使用"上次已知值"而非"上一回合的 previousTotal"，确保 fork / resume 后不会重复计算 token。
 
 状态栏的三组分费用比（命中缓存/未命中输入/输出）由当前生效价格档实时计算，不写入每日归档 JSON。
+
+### 并发安全
+
+多个 CLI 进程（或同一进程中的多个 session）各自持有一个 `DailyTracker` 实例，但共享 `~/.omp/cost-archive/deepseek-cost.json`：
+
+- 所有变更（`recordTurnCost` / `ensureSession` / `write` / `archive`）通过 OMP 原生跨进程文件锁（`@oh-my-pi/pi-utils/file-lock`：Windows 命名互斥体、Linux abstract Unix socket、其他平台 `flock`）串行化；等待预算为 300 次 × 50ms（15s），落在 OMP 扩展 handler 的 30s 上限内。
+- 锁内重新读取磁盘上的最新数据、合并变更，最后写临时文件 + `rename` 原子发布——任何进程都不会覆盖其他进程刚写入的费用。Windows 上 `rename` 碰到读进程短暂持有文件时自动带退避重试。
+- 读路径不加锁，但按 `size + mtime` 缓存失效，因此一个 CLI 的 Accrued 会实时反映另一个 CLI 的累计费用。
+- 损坏的 JSON 不会被静默重置为空白归档：显示回退到最后一次成功快照，写路径在锁内报错并交由调用方 best-effort 处理。
+- `file-lock.ts` 用惰性动态 import + 测试注入 seam 包装 OMP 锁，独立于 OMP 运行时的测试不会加载原生 addon。
 
 ### 状态管理
 
@@ -85,7 +95,8 @@ balance-cache.ts    纯内存 TTL 缓存：DeepSeek 余额 + Codex 周额度
 tracker-state.ts   TrackerState 类型 + 工厂函数（含 ChatGPT 周额度状态）
 cost-calc.ts       纯函数：DeepSeek 价格解析、ChatGPT USD 费用、token 格式化、状态行构建
 turn-cost.ts       单回合 per-request 费用累计器（DeepSeek）
-daily-tracker.ts   每日持久化：JSON 读写、归档、session 追踪（DeepSeek）
+daily-tracker.ts   每日持久化：OMP 跨进程锁 + 原子 JSON 读写、归档、session 追踪、回合费用合并（DeepSeek）
+file-lock.ts       OMP 原生文件锁的惰性加载 wrapper + 测试 seam
 segment-bar.ts     分段进度条渲染：fine / coarse 双模式（DeepSeek）
 chatgpt-usage.ts   ChatGPT/Codex 周额度 scoped proxy 获取、响应头解析、窗口选择、节奏条/重置/错误渲染
 ```
