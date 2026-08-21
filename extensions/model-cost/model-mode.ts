@@ -4,7 +4,7 @@
  * The extension has three visible modes plus an inactive state:
  * - "deepseek": official DeepSeek provider with a known DeepSeek model; uses RMB billing.
  * - "codex": OpenAI Codex OAuth models; uses ChatGPT/Codex USD billing and weekly usage.
- * - "token-only": known DeepSeek model IDs served through another provider (e.g. opencode-go);
+ * - "token-only": selected DeepSeek model IDs served through another provider (e.g. opencode-go);
  *   shows token usage only, never RMB costs, balance, or daily accumulation.
  * - "hidden": anything else; no widget.
  */
@@ -14,6 +14,12 @@ import { isOpenAICodexModel } from "./chatgpt-usage";
 
 export const DEEPSEEK_PROVIDER = "deepseek";
 
+/** DeepSeek models that are still recognized (token-only) on non-DeepSeek providers. */
+const TOKEN_ONLY_DEEPSEEK_MODEL_IDS: Record<string, true> = {
+  "deepseek-v4-pro": true,
+  "deepseek-v4-flash": true,
+};
+
 export type ModelMode = "deepseek" | "codex" | "token-only" | "hidden";
 
 /** True when the current model is the official DeepSeek provider with a known DeepSeek model. */
@@ -21,14 +27,14 @@ export function isDeepSeekModel(model: { provider?: string; id?: string } | unde
   return model?.provider === DEEPSEEK_PROVIDER && priceForModel(model?.id) !== undefined;
 }
 
-/** True when a known DeepSeek model is served through a non-DeepSeek, non-Codex provider. */
+/** True when a token-only-eligible DeepSeek model is served through a non-DeepSeek, non-Codex provider. */
 export function isTokenOnlyDeepSeekModel(
   model: { provider?: string; id?: string } | undefined,
 ): boolean {
   return (
     !isDeepSeekModel(model) &&
     !isOpenAICodexModel(model) &&
-    priceForModel(model?.id) !== undefined
+    TOKEN_ONLY_DEEPSEEK_MODEL_IDS[model?.id ?? ""] === true
   );
 }
 

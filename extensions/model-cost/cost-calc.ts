@@ -15,15 +15,18 @@ export interface PriceSchedule {
   offPeak: PriceTier;
 }
 
+const FLASH_SCHEDULE: PriceSchedule = {
+  peak: { input: 3, cacheRead: 0.1, output: 9 },
+  offPeak: { input: 1.5, cacheRead: 0.05, output: 4.5 },
+};
+
 export const PRICE_RMB_PER_1M: Record<string, PriceSchedule> = {
   "deepseek-v4-pro": {
     peak: { input: 9, cacheRead: 0.3, output: 27 },
     offPeak: { input: 4.5, cacheRead: 0.15, output: 13.5 },
   },
-  "deepseek-v4-flash": {
-    peak: { input: 3, cacheRead: 0.1, output: 9 },
-    offPeak: { input: 1.5, cacheRead: 0.05, output: 4.5 },
-  },
+  "deepseek-v4-flash": FLASH_SCHEDULE,
+  "deepseek-v4-flash-vision-exp": FLASH_SCHEDULE,
 };
 
 /** Resolve the price schedule for a model id; undefined when the model is not tracked. */

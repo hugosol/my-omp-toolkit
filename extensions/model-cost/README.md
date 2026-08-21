@@ -10,7 +10,7 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 - **每日花费追踪** — 按 session 分组统计，数据持久化到 `~/.omp/cost-archive/deepseek-cost.json`
 - **分段进度条** — 可视化每个 session 的费用占比，支持精细模式（≤ ¥20）和粗模式（> ¥20）
 - **余额查询** — 自动查询 DeepSeek 账户余额
-- **Token-only 模式** — 当 `deepseek-v4-*` 模型经由其它 provider（如 opencode-go）提供时，只显示上下文进度条和 token 统计，不使用 RMB 计费、余额或每日累计
+- **Token-only 模式** — 当 `deepseek-v4-pro` / `deepseek-v4-flash` 模型经由其它 provider（如 opencode-go）提供时，只显示上下文进度条和 token 统计，不使用 RMB 计费、余额或每日累计；`deepseek-v4-flash-vision-exp` 仅在官方 deepseek provider 下识别
 - **双数据源 TTL 缓存** — 输入 `/model`、`/models`、`/switch` 时预取 DeepSeek 余额和 Codex 周额度，30 秒内不重复请求；UI 仍按当前模型展示对应缓存值
 - **ChatGPT/Codex 周额度节奏条** — 当当前模型为 `openai-codex` OAuth 模型时，用 20 格单轴进度条同时编码已用额度和七天周期时间进度，显示 `quota% / time%`、重置倒计时和绝对时间
 - **ChatGPT/Codex 费用** — 使用 OMP catalog 中的动态 USD 价格计算 CacheRead/In/CacheWrite/Out 四路比例、Total/Turn 估计费用；不显示 DeepSeek 余额和每日累计
@@ -25,8 +25,10 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 | deepseek-v4-pro | 空闲 | ¥4.5 | ¥0.15 | ¥13.5 |
 | deepseek-v4-flash | 高峰 | ¥3 | ¥0.10 | ¥9 |
 | deepseek-v4-flash | 空闲 | ¥1.5 | ¥0.05 | ¥4.5 |
+| deepseek-v4-flash-vision-exp | 高峰 | ¥3 | ¥0.10 | ¥9 |
+| deepseek-v4-flash-vision-exp | 空闲 | ¥1.5 | ¥0.05 | ¥4.5 |
 
-DeepSeek 费用分支仅在 provider 为 `deepseek` 且模型 ID 命中以上两个模型时激活；其他 provider 上的 `deepseek-v4-*` 进入 token-only 模式，不显示 RMB 费用、余额或每日累计；其余非 ChatGPT/Codex 模型不显示 widget、不累计费用。
+DeepSeek 费用分支仅在 provider 为 `deepseek` 且模型 ID 命中以上模型时激活；`deepseek-v4-pro` / `deepseek-v4-flash` 经由其它 provider 进入 token-only 模式，`deepseek-v4-flash-vision-exp` 只在官方 deepseek provider 下识别；其余非 ChatGPT/Codex 模型不显示 widget、不累计费用。
 
 计价以每次 API 请求发出时刻（`before_provider_request`）锚定价格档位；同一请求的 `message_end` 用量按该档位计费。空闲时定时器会在下一个边界（09:00 / 12:00 / 14:00 / 18:00）自动刷新图标。
 
@@ -56,7 +58,7 @@ DeepSeek 费用分支仅在 provider 为 `deepseek` 且模型 ID 命中以上两
 | `/budget detail` | 切换显示模式：简略 / 详细 |
 | `/budget clear` | 归档当前追踪数据并重置，开始新周期 |
 
-数字预算只允许在 provider 为 `deepseek` 的 DeepSeek 模式下设置；opencode-go 等其它 provider 即使模型 ID 是 `deepseek-v4-*` 也会拒绝。ChatGPT/Codex 始终固定为 272K，其他模型会拒绝修改。K 按十进制 1,000 换算并允许小数；正数超过 1000K 时静默截断为 1000K，不支持 `M` 后缀。
+数字预算只允许在 provider 为 `deepseek` 的 DeepSeek 模式下设置；opencode-go 等其它 provider 即使模型 ID 是已知 DeepSeek 模型也会拒绝。ChatGPT/Codex 始终固定为 272K，其他模型会拒绝修改。K 按十进制 1,000 换算并允许小数；正数超过 1000K 时静默截断为 1000K，不支持 `M` 后缀。
 
 ## 原理
 

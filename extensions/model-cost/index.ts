@@ -16,6 +16,7 @@
  *                      off-peak input ¥4.5 / cache ¥0.15 / output ¥13.5
  *   deepseek-v4-flash: peak input ¥3 / cache ¥0.10 / output ¥9
  *                      off-peak input ¥1.5 / cache ¥0.05 / output ¥4.5
+ *   deepseek-v4-flash-vision-exp: same as deepseek-v4-flash
  *
  * Commands:
  *   /budget <N>K   — Override the DeepSeek display budget, capped at 1000K.

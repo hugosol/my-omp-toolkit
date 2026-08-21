@@ -4,11 +4,21 @@ import {
   isDeepSeekModel,
   isTokenOnlyDeepSeekModel,
 } from "../../extensions/model-cost/model-mode";
+import { priceForModel } from "../../extensions/model-cost/cost-calc";
 
 describe("classifyModelMode", () => {
   test("classifies official DeepSeek provider with known DeepSeek model as deepseek", () => {
     expect(classifyModelMode({ id: "deepseek-v4-pro", provider: "deepseek" })).toBe("deepseek");
     expect(classifyModelMode({ id: "deepseek-v4-flash", provider: "deepseek" })).toBe("deepseek");
+  });
+
+  test("treats deepseek-v4-flash-vision-exp as flash only on official DeepSeek provider", () => {
+    expect(priceForModel("deepseek-v4-flash-vision-exp")).toEqual({
+      peak: { input: 3, cacheRead: 0.1, output: 9 },
+      offPeak: { input: 1.5, cacheRead: 0.05, output: 4.5 },
+    });
+    expect(classifyModelMode({ id: "deepseek-v4-flash-vision-exp", provider: "deepseek" })).toBe("deepseek");
+    expect(classifyModelMode({ id: "deepseek-v4-flash-vision-exp", provider: "opencode-go" })).toBe("hidden");
   });
 
   test("classifies openai-codex provider as codex regardless of model id", () => {
