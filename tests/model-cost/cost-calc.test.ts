@@ -115,6 +115,22 @@ describe("isPeakHour", () => {
     // 21:00 Asia/Shanghai
     expect(isPeakHour(new Date("2026-08-17T13:00:00.000Z"))).toBe(false);
   });
+
+  test("returns false on Saturday 09:00 Beijing (weekend all-day off-peak)", () => {
+    expect(isPeakHour(new Date("2026-08-22T01:00:00.000Z"))).toBe(false);
+  });
+
+  test("returns false on Saturday 12:00 Beijing (weekend all-day off-peak)", () => {
+    expect(isPeakHour(new Date("2026-08-22T04:00:00.000Z"))).toBe(false);
+  });
+
+  test("returns false on Saturday 14:00 Beijing (weekend all-day off-peak)", () => {
+    expect(isPeakHour(new Date("2026-08-22T06:00:00.000Z"))).toBe(false);
+  });
+
+  test("returns false on Sunday 18:00 Beijing (weekend all-day off-peak)", () => {
+    expect(isPeakHour(new Date("2026-08-23T10:00:00.000Z"))).toBe(false);
+  });
 });
 
 // ============================================================
@@ -177,6 +193,18 @@ describe("resolvePriceTier", () => {
 
   test("returns flash off-peak tier during off-peak", () => {
     expect(resolvePriceTier("deepseek-v4-flash", offPeakDate)).toEqual(FLASH_OFF_PEAK);
+  });
+
+  test("returns pro off-peak tier on Saturday 09:00 Beijing", () => {
+    expect(resolvePriceTier("deepseek-v4-pro", new Date("2026-08-22T01:00:00.000Z"))).toEqual(PRO_OFF_PEAK);
+  });
+
+  test("returns flash off-peak tier on Sunday 14:00 Beijing", () => {
+    expect(resolvePriceTier("deepseek-v4-flash", new Date("2026-08-23T06:00:00.000Z"))).toEqual(FLASH_OFF_PEAK);
+  });
+
+  test("returns vision off-peak tier on Saturday 18:00 Beijing", () => {
+    expect(resolvePriceTier("deepseek-v4-flash-vision-exp", new Date("2026-08-22T10:00:00.000Z"))).toEqual(FLASH_OFF_PEAK);
   });
 
   test("returns undefined for unsupported model", () => {

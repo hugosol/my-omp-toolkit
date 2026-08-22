@@ -11,7 +11,7 @@
  * the widget switches to ChatGPT/Codex mode: context progress bar, weekly
  * 7-day usage percentage + reset time, and USD-estimated token/cost stats.
  *
- * Pricing (RMB per million tokens, Beijing peak/off-peak):
+ * Pricing (RMB per million tokens, Beijing peak/off-peak; weekends all-day off-peak):
  *   deepseek-v4-pro:   peak input ¥9 / cache ¥0.30 / output ¥27
  *                      off-peak input ¥4.5 / cache ¥0.15 / output ¥13.5
  *   deepseek-v4-flash: peak input ¥3 / cache ¥0.10 / output ¥9

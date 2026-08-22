@@ -1,7 +1,7 @@
 /**
  * Cost calculation and token formatting — pure functions, no I/O.
  * Pricing follows the official DeepSeek price list (RMB per million tokens)
- * with Beijing peak/off-peak time-of-day rates.
+ * with Beijing peak/off-peak time-of-day rates; weekends are all-day off-peak.
  */
 
 export interface PriceTier {
@@ -51,8 +51,11 @@ function beijingMsOfDay(date: Date): number {
 /**
  * Whether the given instant is DeepSeek peak time in Beijing.
  * Peak intervals are closed: [09:00, 12:00] and [14:00, 18:00].
+ * Weekends are all-day off-peak, so peak windows apply only on weekdays.
  */
 export function isPeakHour(date: Date): boolean {
+  const beijingDay = new Date(date.getTime() + BEIJING_OFFSET_MS).getUTCDay();
+  if (beijingDay === 0 || beijingDay === 6) return false;
   const ms = beijingMsOfDay(date);
   return (ms >= PEAK_START_1 && ms <= PEAK_END_1) || (ms >= PEAK_START_2 && ms <= PEAK_END_2);
 }
