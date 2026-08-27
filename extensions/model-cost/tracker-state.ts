@@ -39,10 +39,10 @@ export type ChatGPTUsageKind =
   | "auth"
   | "transport";
 
-/** ChatGPT/Codex weekly usage snapshot for the active OAuth account. */
+/** ChatGPT/Codex usage snapshot for a single quota window (5h or 7d). */
 export interface ChatGPTUsageState {
   kind: ChatGPTUsageKind;
-  /** Weekly used percent from the 7d window, 0–100. */
+  /** Quota used percent from this window, 0–100. */
   usedPercent: number | null;
   /** Absolute reset timestamp in epoch ms, when known. */
   resetsAt: number | null;
@@ -52,6 +52,14 @@ export interface ChatGPTUsageState {
   source?: "api" | "header";
   /** Displayable error/status detail for config, auth, transport, incompatible. */
   error?: string | null;
+}
+
+/** Combined ChatGPT/Codex usage for the active OAuth account. */
+export interface ChatGPTUsageSnapshot {
+  /** Five-hour rolling quota window. */
+  fiveHour: ChatGPTUsageState;
+  /** Seven-day rolling quota window. */
+  weekly: ChatGPTUsageState;
 }
 
 export interface TrackerState {
@@ -66,6 +74,8 @@ export interface TrackerState {
   turnCost: TurnCostState;
   /** ChatGPT/Codex weekly usage for the active OAuth account. */
   chatgpt: ChatGPTUsageState;
+  /** ChatGPT/Codex five-hour usage for the active OAuth account. */
+  chatgptFiveHour: ChatGPTUsageState;
 }
 
 export function createTrackerState(): TrackerState {
@@ -86,5 +96,6 @@ export function createTrackerState(): TrackerState {
     detailMode: false,
     turnCost: createTurnCostState(),
     chatgpt: { kind: "idle", usedPercent: null, resetsAt: null, fetchedAt: null },
+    chatgptFiveHour: { kind: "idle", usedPercent: null, resetsAt: null, fetchedAt: null },
   };
 }

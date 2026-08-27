@@ -7,11 +7,12 @@
  * rendered as an explicit widget error and never falls back to a direct request.
  */
 
-import type { ChatGPTUsageState } from "./tracker-state";
+import type { ChatGPTUsageSnapshot, ChatGPTUsageState } from "./tracker-state";
 
 const CODEX_PROVIDER = "openai-codex";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
+const FIVE_HOUR_MS = 5 * HOUR_MS;
 const USAGE_TIMEOUT_MS = 10_000;
 
 interface AccountLike {
@@ -152,16 +153,30 @@ function usageStateFromLimit(
   };
 }
 
+function missingState(
+  source: "api" | "header",
+  fetchedAt: number,
+): ChatGPTUsageState {
+  return { kind: "missing", source, usedPercent: null, resetsAt: null, fetchedAt };
+}
+
+function errorSnapshot(state: ChatGPTUsageState): ChatGPTUsageSnapshot {
+  return { fiveHour: state, weekly: state };
+}
+
 /**
- * Fetch the first stored Codex OAuth account's weekly usage through the public
- * Codex usage provider, with a request-scoped provider proxy.
+ * Fetch the first stored Codex OAuth account's five-hour and weekly usage
+ * through the public Codex usage provider, with a request-scoped provider
+ * proxy.
  */
-export async function fetchChatGPTUsage(ctx: UsageFetchContextLike): Promise<ChatGPTUsageState> {
+export async function fetchChatGPTUsageSnapshot(
+  ctx: UsageFetchContextLike,
+): Promise<ChatGPTUsageSnapshot> {
   let modules: OmpUsageModules;
   try {
     modules = await ompModuleLoader();
   } catch {
-    return errorState("incompatible", "incompatible OMP version");
+    return errorSnapshot(errorState("incompatible", "incompatible OMP version"));
   }
 
   try {
@@ -169,19 +184,19 @@ export async function fetchChatGPTUsage(ctx: UsageFetchContextLike): Promise<Cha
     const sessionId = ctx.sessionManager.getSessionId();
     const accounts = auth.listOAuthAccounts(CODEX_PROVIDER, sessionId);
     if (!accounts || accounts.length === 0) {
-      return errorState("auth", "no Codex OAuth account");
+      return errorSnapshot(errorState("auth", "no Codex OAuth account"));
     }
 
     const access = await auth.getOAuthAccessAt(CODEX_PROVIDER, accounts[0].position);
     if (!access || !access.ok) {
-      return errorState("auth", access && "error" in access ? access.error : "OAuth access failed");
+      return errorSnapshot(errorState("auth", access && "error" in access ? access.error : "OAuth access failed"));
     }
 
     const proxy = modules.getProxyForProvider
       ? modules.getProxyForProvider(CODEX_PROVIDER)
       : readProviderProxy();
     if (!proxy) {
-      return errorState("config", "missing PI_PROXY_OPENAI_CODEX / PI_PROXY");
+      return errorSnapshot(errorState("config", "missing PI_PROXY_OPENAI_CODEX / PI_PROXY"));
     }
 
     let capturedError: string | null = null;
@@ -216,25 +231,43 @@ export async function fetchChatGPTUsage(ctx: UsageFetchContextLike): Promise<Cha
     );
 
     if (!report) {
-      if (capturedError) return errorState("transport", capturedError);
-      if (capturedStatus !== null) return errorState("transport", `HTTP ${capturedStatus}`);
-      return errorState("transport", "usage request failed");
+      if (capturedError) return errorSnapshot(errorState("transport", capturedError));
+      if (capturedStatus !== null) return errorSnapshot(errorState("transport", `HTTP ${capturedStatus}`));
+      return errorSnapshot(errorState("transport", "usage request failed"));
     }
 
-    const limit = pickWeeklyLimit(report, { accountId: access.accountId, email: access.email });
-    if (!limit) {
-      return { kind: "missing", source: "api", usedPercent: null, resetsAt: null, fetchedAt: report.fetchedAt };
-    }
-    return usageStateFromLimit(report, limit, "api");
+    const identity = { accountId: access.accountId, email: access.email };
+    const weeklyLimit = pickWeeklyLimit(report, identity);
+    const fiveHourLimit = pickFiveHourLimit(report, identity);
+    return {
+      weekly: weeklyLimit
+        ? usageStateFromLimit(report, weeklyLimit, "api")
+        : missingState("api", report.fetchedAt),
+      fiveHour: fiveHourLimit
+        ? usageStateFromLimit(report, fiveHourLimit, "api")
+        : missingState("api", report.fetchedAt),
+    };
   } catch (error) {
-    return errorState("transport", error instanceof Error ? error.message : String(error));
+    return errorSnapshot(errorState("transport", error instanceof Error ? error.message : String(error)));
   }
+}
+
+/**
+ * Fetch the first stored Codex OAuth account's weekly usage through the public
+ * Codex usage provider, with a request-scoped provider proxy.
+ */
+export async function fetchChatGPTUsage(ctx: UsageFetchContextLike): Promise<ChatGPTUsageState> {
+  const snapshot = await fetchChatGPTUsageSnapshot(ctx);
+  return snapshot.weekly;
 }
 
 const WEEK_MS = 7 * DAY_MS;
 const WEEK_TOLERANCE_MS = WEEK_MS * 0.05;
 const MIN_WEEK_MS = WEEK_MS - WEEK_TOLERANCE_MS;
 const MAX_WEEK_MS = WEEK_MS + WEEK_TOLERANCE_MS;
+const FIVE_HOUR_TOLERANCE_MS = FIVE_HOUR_MS * 0.05;
+const MIN_FIVE_HOUR_MS = FIVE_HOUR_MS - FIVE_HOUR_TOLERANCE_MS;
+const MAX_FIVE_HOUR_MS = FIVE_HOUR_MS + FIVE_HOUR_TOLERANCE_MS;
 const WEEKLY_BAR_WIDTH = 20;
 const WEEKLY_HEAVY = "\u2501"; // ━
 const WEEKLY_THIN = "\u2500"; // ─
@@ -275,6 +308,41 @@ function isWeeklyLimit(limit: UsageLimitLike): boolean {
   );
 }
 
+/** Pick the closest 5h main-chat window for the active account. */
+export function pickFiveHourLimit(
+  report: UsageReportLike,
+  identity?: AccountIdentityLike,
+): UsageLimitLike | undefined {
+  const fiveHour = report.limits
+    .filter(limit => limit.id === "openai-codex:primary" || limit.id === "openai-codex:secondary")
+    .filter(isFiveHourLimit);
+  if (fiveHour.length === 0) return undefined;
+
+  let candidates = fiveHour;
+  const accountId = identity?.accountId;
+  if (accountId) {
+    const byAccount = fiveHour.filter(limit => limit.scope.accountId === accountId);
+    if (byAccount.length > 0) candidates = byAccount;
+  }
+
+  return [...candidates].sort((a, b) => {
+    const aDelta = Math.abs((a.window?.durationMs ?? 0) - FIVE_HOUR_MS);
+    const bDelta = Math.abs((b.window?.durationMs ?? 0) - FIVE_HOUR_MS);
+    return aDelta - bDelta;
+  })[0];
+}
+
+/** A window is five-hour only when its reported duration is within ±5% of 5 hours. */
+function isFiveHourLimit(limit: UsageLimitLike): boolean {
+  const durationMs = limit.window?.durationMs;
+  return (
+    typeof durationMs === "number" &&
+    Number.isFinite(durationMs) &&
+    durationMs >= MIN_FIVE_HOUR_MS &&
+    durationMs <= MAX_FIVE_HOUR_MS
+  );
+}
+
 /** Format reset as `2d 14h (08/20 15:00)` using the local timezone. */
 export function formatReset(resetsAt: number | null, now: number = Date.now()): string {
   if (!resetsAt || !Number.isFinite(resetsAt)) return "";
@@ -302,60 +370,63 @@ export interface WeeklyThemeLike {
 const IDENTITY_THEME: WeeklyThemeLike = { fg: (_color, text) => text };
 
 /**
- * Build the weekly usage widget segment, e.g.
+ * Build one quota window widget segment, e.g.
  * `7d ━━━│━━──── 60.0% / 30.0% · resets in 4d 21h (08/23 14:00)`.
  *
  * Width fallback follows the agreed priority: full bar + reset text, no bar +
  * reset text, no bar + countdown only, minimal percentages, then ANSI-aware
  * truncation of the minimal form. The result always stays on one physical line.
  */
-export function buildWeeklyUsagePart(
+function buildWindowUsagePart(
   usage: Pick<ChatGPTUsageState, "kind" | "usedPercent" | "resetsAt" | "error">,
-  now: number = Date.now(),
-  width: number = 120,
-  theme: WeeklyThemeLike = IDENTITY_THEME,
+  now: number,
+  width: number,
+  theme: WeeklyThemeLike,
+  label: string,
+  durationMs: number,
+  missingText: string,
 ): string {
   const kind = usage.kind;
   if (kind === "idle") return "";
-  if (kind === "loading") return "7d … · 正在获取";
-  if (kind === "incompatible") return "7d incompatible OMP version";
+  if (kind === "loading") return `${label} … · 正在获取`;
+  if (kind === "incompatible") return `${label} incompatible OMP version`;
   if (kind === "config" || kind === "auth" || kind === "transport") {
-    return `7d ${formatErrorText(usage.error ?? "")}`;
+    return `${label} ${formatErrorText(usage.error ?? "")}`;
   }
   if (kind === "missing") {
-    const parts = ["7d weekly limit not reported"];
+    const parts = [`${label} ${missingText}`];
     if (usage.error) parts.push(formatErrorText(usage.error));
     return parts.join(" · ");
   }
 
   const pct = usage.usedPercent;
   if (pct === null || !Number.isFinite(pct)) {
-    const reset = buildResetText(usage.resetsAt, now);
-    const parts = ["7d --%"];
+    const reset = buildResetText(usage.resetsAt, now, durationMs);
+    const parts = [`${label} --%`];
     if (reset) parts.push(reset);
     if (usage.error) parts.push(formatErrorText(usage.error));
     return parts.join(" · ");
   }
 
-  const resetState = getResetState(usage.resetsAt, now);
+  const resetState = getResetState(usage.resetsAt, now, durationMs);
   const timePct = resetState.valid
-    ? ((now - (usage.resetsAt! - WEEK_MS)) / WEEK_MS) * 100
+    ? ((now - (usage.resetsAt! - durationMs)) / durationMs) * 100
     : null;
   const status = resetState.valid ? pacingColor(pct - timePct!) : "muted";
   const quotaLabel = pct.toFixed(1);
   const styledQuotaLabel = theme.fg(status, quotaLabel);
   const timeLabel = timePct === null ? "--" : timePct.toFixed(1);
   const bar = buildPacingBar(pct, timePct, status, theme);
-  const resetFull = buildResetText(usage.resetsAt, now);
+  const resetFull = buildResetText(usage.resetsAt, now, durationMs);
   const resetCountdown = resetState.valid
     ? `resets in ${formatCountdown(usage.resetsAt!, now)}`
     : null;
 
   const candidates = [
-    `7d ${bar} ${styledQuotaLabel}% / ${timeLabel}%${resetFull ? ` · ${resetFull}` : ""}`,
-    `7d ${styledQuotaLabel}% / ${timeLabel}%${resetFull ? ` · ${resetFull}` : ""}`,
-    `7d ${styledQuotaLabel}% / ${timeLabel}%${resetCountdown ? ` · ${resetCountdown}` : ""}`,
-    `7d ${styledQuotaLabel}% / ${timeLabel}%`,
+    `${label} ${bar} ${styledQuotaLabel}% / ${timeLabel}%${resetFull ? ` · ${resetFull}` : ""}`,
+    `${label} ${styledQuotaLabel}% / ${timeLabel}%${resetFull ? ` · ${resetFull}` : ""}`,
+    `${label} ${styledQuotaLabel}% / ${timeLabel}%${resetCountdown ? ` · ${resetCountdown}` : ""}`,
+    `${label} ${styledQuotaLabel}% / ${timeLabel}%`,
   ];
 
   let selected = "";
@@ -370,20 +441,45 @@ export function buildWeeklyUsagePart(
   return selected;
 }
 
+/** Build the weekly (7d) usage widget segment. */
+export function buildWeeklyUsagePart(
+  usage: Pick<ChatGPTUsageState, "kind" | "usedPercent" | "resetsAt" | "error">,
+  now: number = Date.now(),
+  width: number = 120,
+  theme: WeeklyThemeLike = IDENTITY_THEME,
+): string {
+  return buildWindowUsagePart(usage, now, width, theme, "7d", WEEK_MS, "weekly limit not reported");
+}
+
+/** Build the five-hour (5h) usage widget segment. */
+export function buildFiveHourUsagePart(
+  usage: Pick<ChatGPTUsageState, "kind" | "usedPercent" | "resetsAt" | "error">,
+  now: number = Date.now(),
+  width: number = 120,
+  theme: WeeklyThemeLike = IDENTITY_THEME,
+): string {
+  return buildWindowUsagePart(usage, now, width, theme, "5h", FIVE_HOUR_MS, "5h limit not reported");
+}
+
 function getResetState(
   resetsAt: number | null | undefined,
   now: number,
+  durationMs: number,
 ): { valid: boolean; kind: "valid" | "unknown" | "expired" | "invalid" } {
   if (typeof resetsAt !== "number" || !Number.isFinite(resetsAt) || resetsAt <= 0) {
     return { valid: false, kind: "unknown" };
   }
   if (resetsAt < now) return { valid: false, kind: "expired" };
-  if (resetsAt - now > WEEK_MS) return { valid: false, kind: "invalid" };
+  if (resetsAt - now > durationMs) return { valid: false, kind: "invalid" };
   return { valid: true, kind: "valid" };
 }
 
-function buildResetText(resetsAt: number | null | undefined, now: number): string | null {
-  const state = getResetState(resetsAt, now);
+function buildResetText(
+  resetsAt: number | null | undefined,
+  now: number,
+  durationMs: number,
+): string | null {
+  const state = getResetState(resetsAt, now, durationMs);
   if (state.valid) return `resets in ${formatReset(resetsAt!, now)}`;
   if (state.kind === "unknown") return "reset unknown";
   if (state.kind === "expired") return `reset expired (${formatLocalTime(resetsAt!)})`;
@@ -543,13 +639,13 @@ function displayWidth(char: string): number {
 }
 
 /**
- * Parse Codex rate-limit headers into a weekly usage snapshot using OMP's
- * public parser and the same main-chat weekly-window selector.
+ * Parse Codex rate-limit headers into both 5h and 7d usage snapshots using
+ * OMP's public parser and the same duration-driven main-chat selectors.
  */
-export async function parseChatGPTUsageHeaders(
+export async function parseChatGPTUsageHeadersSnapshot(
   headers: Record<string, string>,
   now: number = Date.now(),
-): Promise<ChatGPTUsageState | null> {
+): Promise<ChatGPTUsageSnapshot | null> {
   let modules: OmpUsageModules;
   try {
     modules = await ompModuleLoader();
@@ -560,12 +656,29 @@ export async function parseChatGPTUsageHeaders(
   try {
     const report = modules.parseCodexRateLimitHeaders(headers, now);
     if (!report) return null;
-    const limit = pickWeeklyLimit(report);
-    if (!limit) {
-      return { kind: "missing", source: "header", usedPercent: null, resetsAt: null, fetchedAt: now };
-    }
-    return usageStateFromLimit(report, limit, "header");
+    const weeklyLimit = pickWeeklyLimit(report);
+    const fiveHourLimit = pickFiveHourLimit(report);
+    return {
+      weekly: weeklyLimit
+        ? usageStateFromLimit(report, weeklyLimit, "header")
+        : missingState("header", now),
+      fiveHour: fiveHourLimit
+        ? usageStateFromLimit(report, fiveHourLimit, "header")
+        : missingState("header", now),
+    };
   } catch {
     return null;
   }
+}
+
+/**
+ * Parse Codex rate-limit headers into a weekly usage snapshot using OMP's
+ * public parser and the same main-chat weekly-window selector.
+ */
+export async function parseChatGPTUsageHeaders(
+  headers: Record<string, string>,
+  now: number = Date.now(),
+): Promise<ChatGPTUsageState | null> {
+  const snapshot = await parseChatGPTUsageHeadersSnapshot(headers, now);
+  return snapshot?.weekly ?? null;
 }

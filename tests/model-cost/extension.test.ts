@@ -99,11 +99,17 @@ function codexContext(overrides: {
 }
 
 function weeklyReport(usedPercent = 34, resetsAt = Date.now() + 24 * 60 * 60 * 1000) {
+  const fiveHourResetsAt = Date.now() + 2 * 60 * 60 * 1000;
   return {
     provider: "openai-codex",
     fetchedAt: 123,
     limits: [{
       id: "openai-codex:primary",
+      scope: { accountId: "acct-1", windowId: "5h" },
+      window: { id: "5h", durationMs: 5 * 60 * 60 * 1000, resetsAt: fiveHourResetsAt },
+      amount: { used: 12, limit: 100, usedFraction: 0.12, unit: "percent" },
+    }, {
+      id: "openai-codex:secondary",
       scope: { accountId: "acct-1", windowId: "7d" },
       window: { id: "7d", durationMs: 7 * 24 * 60 * 60 * 1000, resetsAt },
       amount: { used: usedPercent, limit: 100, usedFraction: usedPercent / 100, unit: "percent" },
@@ -479,6 +485,62 @@ describe("model-cost Codex usage lifecycle", () => {
     expect(calls).toBe(1);
   });
 
+  test("after_provider_response updates both 5h and 7d from headers", async () => {
+    process.env.PI_PROXY = "http://generic-proxy";
+    installFakeCodexModules({
+      fetchUsage: async () => weeklyReport(34),
+      parseRateLimitHeaders: (_headers: Record<string, string>, now = Date.now()) => ({
+        provider: "openai-codex",
+        fetchedAt: now,
+        limits: [{
+          id: "openai-codex:primary",
+          scope: { accountId: "acct-1", windowId: "5h" },
+          window: { id: "5h", durationMs: 5 * 60 * 60 * 1000, resetsAt: 1_800_000_000_000 },
+          amount: { used: 20, limit: 100, usedFraction: 0.2, unit: "percent" },
+        }, {
+          id: "openai-codex:secondary",
+          scope: { accountId: "acct-1", windowId: "7d" },
+          window: { id: "7d", durationMs: 7 * 24 * 60 * 60 * 1000, resetsAt: 1_800_100_000_000 },
+          amount: { used: 55, limit: 100, usedFraction: 0.55, unit: "percent" },
+        }],
+      }),
+    });
+    const { handlers } = mountExtension();
+    const { ctx, widgetCalls } = codexContext();
+
+    await fire(handlers, "session_start", ctx);
+    await fireWithPayload(
+      handlers,
+      "after_provider_response",
+      { headers: {} },
+      ctx,
+    );
+
+    const last = widgetCalls[widgetCalls.length - 1]?.[0] ?? "";
+    expect(last).toContain("5h");
+    expect(last).toContain("20.0%");
+    expect(last).toContain("7d");
+    expect(last).toContain("55.0%");
+  });
+
+  test("message_end does not start an active usage request", async () => {
+    let calls = 0;
+    installFakeCodexModules({
+      fetchUsage: async () => {
+        calls += 1;
+        return weeklyReport();
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const { handlers } = mountExtension();
+    const { ctx } = codexContext();
+
+    await fire(handlers, "session_start", ctx);
+    const before = calls;
+    await fire(handlers, "message_end", { message: { usage: { input: 1, cacheRead: 0, output: 0 } } }, ctx);
+    expect(calls).toBe(before);
+  });
+
   test("active failure clears API data but preserves header data", async () => {
     let fail = false;
     installFakeCodexModules({
@@ -569,7 +631,9 @@ describe("model-cost weekly pacing widget", () => {
 
     await fire(handlers, "session_start", ctx);
 
-    const lines = renderLastWidget(widgetContents, 120);
+    const lines = renderLastWidget(widgetContents, 300);
+    expect(lines[0]).toContain("5h");
+    expect(lines[0]).toContain("7d");
     expect(lines[0]).toContain("━");
     expect(lines[0]).toContain("60.0% /");
     expect(lines.some(line => line.includes("Total:"))).toBe(true);
@@ -588,7 +652,7 @@ describe("model-cost weekly pacing widget", () => {
 
     await fire(handlers, "session_start", ctx);
 
-    const lines = renderLastWidget(widgetContents, 200, theme);
+    const lines = renderLastWidget(widgetContents, 500, theme);
     expect(lines[0]).toContain("[success]━[/success]");
     expect(lines[0]).toContain("[success]40.0[/success]%");
     expect(lines[0]).not.toContain("[success]│[/success]");
@@ -603,7 +667,7 @@ describe("model-cost weekly pacing widget", () => {
 
     await fire(handlers, "session_start", ctx);
 
-    const wide = renderLastWidget(widgetContents, 120);
+    const wide = renderLastWidget(widgetContents, 300);
     expect(wide[0]).toContain("━");
 
     const narrow = renderLastWidget(widgetContents, 70);

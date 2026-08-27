@@ -27,7 +27,7 @@
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
-import { createTrackerState, DEFAULT_DEEPSEEK_BUDGET, type ChatGPTUsageState, type TrackerState } from "./tracker-state";
+import { createTrackerState, DEFAULT_DEEPSEEK_BUDGET, type ChatGPTUsageSnapshot, type ChatGPTUsageState, type TrackerState } from "./tracker-state";
 import {
   resolvePriceTier,
   isPeakHour,
@@ -49,7 +49,14 @@ import {
   setCacheEntry,
   type BalanceCache,
 } from "./balance-cache";
-import { fetchChatGPTUsage, isOpenAICodexModel, buildWeeklyUsagePart, parseChatGPTUsageHeaders, visibleDisplayWidth } from "./chatgpt-usage";
+import {
+  fetchChatGPTUsageSnapshot,
+  isOpenAICodexModel,
+  buildWeeklyUsagePart,
+  buildFiveHourUsagePart,
+  parseChatGPTUsageHeadersSnapshot,
+  visibleDisplayWidth,
+} from "./chatgpt-usage";
 
 // ============================================================================
 // Constants
@@ -148,9 +155,15 @@ function buildChatGPTWidgetLines(
     parts.push(coloredBar);
     prefixWidth = visibleDisplayWidth(coloredBar);
   }
-  const weeklyWidth = Math.max(0, width - (parts.length > 0 ? prefixWidth + 2 : 0));
-  const weekly = buildWeeklyUsagePart(state.chatgpt, Date.now(), weeklyWidth, theme);
-  if (weekly) parts.push(weekly);
+  const quotaWidth = Math.max(0, width - (parts.length > 0 ? prefixWidth + 2 : 0));
+  const separatorWidth = 2;
+  const fiveHourWidth = Math.max(0, Math.floor((quotaWidth - separatorWidth) / 2));
+  const weeklyWidth = Math.max(0, quotaWidth - separatorWidth - fiveHourWidth);
+  const now = Date.now();
+  const fiveHour = buildFiveHourUsagePart(state.chatgptFiveHour, now, fiveHourWidth, theme);
+  const weekly = buildWeeklyUsagePart(state.chatgpt, now, weeklyWidth, theme);
+  const quotaParts = [fiveHour, weekly].filter((part): part is string => part.length > 0);
+  if (quotaParts.length > 0) parts.push(quotaParts.join("  "));
 
   const lines: string[] = [];
   if (parts.length > 0) lines.push(parts.join("  "));
@@ -331,10 +344,12 @@ export default function modelCost(pi: ExtensionAPI): void {
   const daily = createDailyTracker();
   const balanceCache: BalanceCache = createBalanceCache();
   let boundaryTimer: Timer | undefined;
-  let chatgptUsagePromise: Promise<ChatGPTUsageState> | null = null;
+  let chatgptUsagePromise: Promise<ChatGPTUsageSnapshot> | null = null;
 
-  function applyChatGPTUsageResult(ctx: ExtensionContext, result: ChatGPTUsageState): void {
-    const current = state.chatgpt;
+  function applyChatGPTWindowResult(
+    current: ChatGPTUsageState,
+    result: ChatGPTUsageState,
+  ): ChatGPTUsageState {
     if (
       result.kind === "config" ||
       result.kind === "auth" ||
@@ -342,22 +357,36 @@ export default function modelCost(pi: ExtensionAPI): void {
       result.kind === "incompatible"
     ) {
       if (current.source === "header") {
-        state.chatgpt = { ...current, error: result.error ?? null };
-      } else {
-        state.chatgpt = result;
+        return { ...current, error: result.error ?? null };
       }
-    } else {
-      state.chatgpt = result;
+      return result;
     }
-    setCacheEntry(balanceCache.codex, result);
+    return result;
+  }
+
+  function applyHeaderWindowResult(
+    current: ChatGPTUsageState,
+    header: ChatGPTUsageState,
+  ): ChatGPTUsageState {
+    if (header.kind === "missing" || header.kind === "idle") return current;
+    return { ...header, error: current.error ?? null };
+  }
+
+  function applyChatGPTUsageSnapshot(ctx: ExtensionContext, result: ChatGPTUsageSnapshot): void {
+    state.chatgpt = applyChatGPTWindowResult(state.chatgpt, result.weekly);
+    state.chatgptFiveHour = applyChatGPTWindowResult(state.chatgptFiveHour, result.fiveHour);
+    setCacheEntry(balanceCache.codex, {
+      weekly: state.chatgpt,
+      fiveHour: state.chatgptFiveHour,
+    });
     refresh(state, daily, pi, ctx);
   }
 
-  function refreshChatGPTUsage(ctx: ExtensionContext): Promise<ChatGPTUsageState> {
+  function refreshChatGPTUsage(ctx: ExtensionContext): Promise<ChatGPTUsageSnapshot> {
     if (!chatgptUsagePromise) {
-      chatgptUsagePromise = fetchChatGPTUsage(ctx)
+      chatgptUsagePromise = fetchChatGPTUsageSnapshot(ctx)
         .then(result => {
-          applyChatGPTUsageResult(ctx, result);
+          applyChatGPTUsageSnapshot(ctx, result);
           return result;
         })
         .finally(() => {
@@ -367,9 +396,16 @@ export default function modelCost(pi: ExtensionAPI): void {
     return chatgptUsagePromise;
   }
 
-  function startChatGPTUsageRefresh(ctx: ExtensionContext): Promise<ChatGPTUsageState> {
-    if (state.chatgpt.kind === "idle" || state.chatgpt.kind === "loading") {
-      state.chatgpt = { kind: "loading", usedPercent: null, resetsAt: null, fetchedAt: null };
+  function startChatGPTUsageRefresh(ctx: ExtensionContext): Promise<ChatGPTUsageSnapshot> {
+    if (
+      state.chatgpt.kind === "idle" ||
+      state.chatgpt.kind === "loading" ||
+      state.chatgptFiveHour.kind === "idle" ||
+      state.chatgptFiveHour.kind === "loading"
+    ) {
+      const loading: ChatGPTUsageState = { kind: "loading", usedPercent: null, resetsAt: null, fetchedAt: null };
+      state.chatgpt = loading;
+      state.chatgptFiveHour = loading;
       refresh(state, daily, pi, ctx);
     }
     return refreshChatGPTUsage(ctx);
@@ -419,7 +455,8 @@ export default function modelCost(pi: ExtensionAPI): void {
       }
     } else if (mode === "codex") {
       if (isCacheFresh(balanceCache.codex) && balanceCache.codex.value) {
-        state.chatgpt = balanceCache.codex.value;
+        state.chatgpt = balanceCache.codex.value.weekly;
+        state.chatgptFiveHour = balanceCache.codex.value.fiveHour;
       } else {
         await startChatGPTUsageRefresh(ctx);
       }
@@ -428,17 +465,20 @@ export default function modelCost(pi: ExtensionAPI): void {
     refresh(state, daily, pi, ctx);
   }
 
-  /** Fetch DeepSeek balance and Codex weekly usage together and cache both. */
+  /** Fetch DeepSeek balance and Codex usage windows together and cache both. */
   async function refreshBoth(ctx: ExtensionContext): Promise<void> {
     const [balance, usage] = await Promise.all([
       fetchBalance(ctx),
-      fetchChatGPTUsage(ctx).catch(() => null),
+      fetchChatGPTUsageSnapshot(ctx).catch(() => null),
     ]);
     setCacheEntry(balanceCache.deepSeek, balance);
     state.balance = balance;
-    setCacheEntry(balanceCache.codex, usage);
-    if (usage) state.chatgpt = usage;
-    refresh(state, daily, pi, ctx);
+    if (usage) {
+      applyChatGPTUsageSnapshot(ctx, usage);
+    } else {
+      setCacheEntry(balanceCache.codex, null);
+      refresh(state, daily, pi, ctx);
+    }
   }
 
   // ── Input: typed model commands prefetch both data sources with TTL ──
@@ -523,6 +563,7 @@ export default function modelCost(pi: ExtensionAPI): void {
     state.turnDelta = null;
     state.balance = null;
     state.chatgpt = { kind: "idle", usedPercent: null, resetsAt: null, fetchedAt: null };
+    state.chatgptFiveHour = { kind: "idle", usedPercent: null, resetsAt: null, fetchedAt: null };
     finishTurn(state.turnCost);
 
     // Kick off per-model init first so its synchronous preamble (boundary
@@ -557,14 +598,14 @@ export default function modelCost(pi: ExtensionAPI): void {
     await initializeForModel(ctx);
   });
 
-  // ── Provider response — absorb Codex weekly usage headers ──
+  // ── Provider response — absorb Codex 5h/weekly usage headers ──
   pi.on("after_provider_response", async (event, ctx) => {
     if (!isOpenAICodexModel(ctx.model)) return;
-    const headerUsage = await parseChatGPTUsageHeaders(event.headers);
-    if (headerUsage) {
-      state.chatgpt = { ...headerUsage, error: state.chatgpt.error ?? null };
-      refresh(state, daily, pi, ctx);
-    }
+    const headerSnapshot = await parseChatGPTUsageHeadersSnapshot(event.headers);
+    if (!headerSnapshot) return;
+    state.chatgpt = applyHeaderWindowResult(state.chatgpt, headerSnapshot.weekly);
+    state.chatgptFiveHour = applyHeaderWindowResult(state.chatgptFiveHour, headerSnapshot.fiveHour);
+    refresh(state, daily, pi, ctx);
   });
 
   // ── Provider request — anchor price tier for the request being sent ──

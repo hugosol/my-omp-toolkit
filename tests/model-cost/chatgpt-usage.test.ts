@@ -2,10 +2,14 @@ import { afterEach, describe, test, expect } from "bun:test";
 import {
   isOpenAICodexModel,
   pickWeeklyLimit,
+  pickFiveHourLimit,
   formatReset,
   buildWeeklyUsagePart,
+  buildFiveHourUsagePart,
   parseChatGPTUsageHeaders,
+  parseChatGPTUsageHeadersSnapshot,
   fetchChatGPTUsage,
+  fetchChatGPTUsageSnapshot,
   formatErrorText,
   visibleDisplayWidth,
   __setOmpModuleLoaderForTest,
@@ -950,5 +954,183 @@ describe("scoped ChatGPT usage fetch", () => {
     await fetchChatGPTUsage(ctx);
 
     expect(aggregateCalled).toBe(false);
+  });
+});
+
+describe("pickFiveHourLimit", () => {
+  test("returns the 5h limit matching the active accountId", () => {
+    const report = {
+      provider: "openai-codex",
+      fetchedAt: 1,
+      limits: [
+        weeklyLimit({ accountId: "other", windowId: "5h", durationMs: 5 * HOUR_MS }),
+        weeklyLimit({ accountId: "acct-1", windowId: "5h", durationMs: 5 * HOUR_MS }),
+      ],
+    };
+    const picked = pickFiveHourLimit(report, { accountId: "acct-1" });
+    expect(picked?.scope.accountId).toBe("acct-1");
+  });
+
+  test("falls back to the first 5h limit without identity", () => {
+    const report = {
+      provider: "openai-codex",
+      fetchedAt: 1,
+      limits: [weeklyLimit({ accountId: "acct-9", windowId: "5h", durationMs: 5 * HOUR_MS })],
+    };
+    expect(pickFiveHourLimit(report)?.scope.accountId).toBe("acct-9");
+  });
+
+  test("returns undefined when no 5h window exists", () => {
+    const report = {
+      provider: "openai-codex",
+      fetchedAt: 1,
+      limits: [weeklyLimit({ windowId: "7d", durationMs: WEEK_MS })],
+    };
+    expect(pickFiveHourLimit(report, { accountId: "acct-1" })).toBeUndefined();
+  });
+
+  test("recognizes 5h primary while secondary is weekly", () => {
+    const report = {
+      provider: "openai-codex",
+      fetchedAt: 1,
+      limits: [
+        weeklyLimit({ id: "openai-codex:primary", windowId: "5h", durationMs: 5 * HOUR_MS }),
+        weeklyLimit({ id: "openai-codex:secondary", windowId: "7d", durationMs: WEEK_MS }),
+      ],
+    };
+    expect(pickFiveHourLimit(report, { accountId: "acct-1" })?.id).toBe("openai-codex:primary");
+  });
+
+  test("ignores feature-specific additional 5h limits", () => {
+    const report = {
+      provider: "openai-codex",
+      fetchedAt: 1,
+      limits: [weeklyLimit({ id: "openai-codex:spark:primary", windowId: "5h", durationMs: 5 * HOUR_MS })],
+    };
+    expect(pickFiveHourLimit(report, { accountId: "acct-1" })).toBeUndefined();
+  });
+});
+
+describe("fetchChatGPTUsageSnapshot", () => {
+  test("returns both 5h and 7d windows from one active report", async () => {
+    process.env.PI_PROXY = "http://generic-proxy";
+    installFakeOmpModules({
+      fetchUsage: async () => ({
+        provider: "openai-codex",
+        fetchedAt: 123,
+        limits: [
+          weeklyLimit({ id: "openai-codex:primary", windowId: "5h", durationMs: 5 * HOUR_MS, used: 12 }),
+          weeklyLimit({ id: "openai-codex:secondary", windowId: "7d", durationMs: WEEK_MS, used: 34 }),
+        ],
+      }),
+    });
+
+    const result = await fetchChatGPTUsageSnapshot(scopedAuthCtx());
+    expect(result?.weekly.kind).toBe("ok");
+    expect(result?.weekly.usedPercent).toBe(34);
+    expect(result?.fiveHour.kind).toBe("ok");
+    expect(result?.fiveHour.usedPercent).toBe(12);
+    expect(result?.fiveHour.source).toBe("api");
+  });
+
+  test("returns missing state for a window absent from the active report", async () => {
+    process.env.PI_PROXY = "http://generic-proxy";
+    installFakeOmpModules({
+      fetchUsage: async () => ({
+        provider: "openai-codex",
+        fetchedAt: 123,
+        limits: [weeklyLimit({ id: "openai-codex:secondary", windowId: "7d", durationMs: WEEK_MS, used: 34 })],
+      }),
+    });
+
+    const result = await fetchChatGPTUsageSnapshot(scopedAuthCtx());
+    expect(result?.weekly.usedPercent).toBe(34);
+    expect(result?.fiveHour.kind).toBe("missing");
+  });
+});
+
+describe("parseChatGPTUsageHeadersSnapshot", () => {
+  test("returns both windows when headers carry both durations", async () => {
+    installFakeOmpModules({
+      parseRateLimitHeaders: (headers: Record<string, string>, now = Date.now()) => ({
+        provider: "openai-codex",
+        fetchedAt: now,
+        limits: [
+          {
+            id: "openai-codex:primary",
+            scope: { windowId: "5h" },
+            window: { id: "5h", durationMs: 5 * HOUR_MS, resetsAt: 1_800_000_000_000 },
+            amount: { used: 12, usedFraction: 0.12 },
+          },
+          {
+            id: "openai-codex:secondary",
+            scope: { windowId: "7d" },
+            window: { id: "7d", durationMs: WEEK_MS, resetsAt: 1_800_100_000_000 },
+            amount: { used: 34, usedFraction: 0.34 },
+          },
+        ],
+      }),
+    });
+
+    const result = await parseChatGPTUsageHeadersSnapshot({}, 1_800_000_000_000);
+    expect(result?.fiveHour.usedPercent).toBe(12);
+    expect(result?.weekly.usedPercent).toBe(34);
+    expect(result?.fiveHour.source).toBe("header");
+  });
+
+  test("returns missing for an absent window", async () => {
+    installFakeOmpModules({
+      parseRateLimitHeaders: () => ({
+        provider: "openai-codex",
+        fetchedAt: 1,
+        limits: [
+          {
+            id: "openai-codex:primary",
+            scope: { windowId: "5h" },
+            window: { id: "5h", durationMs: 5 * HOUR_MS },
+            amount: { used: 5, usedFraction: 0.05 },
+          },
+        ],
+      }),
+    });
+
+    const result = await parseChatGPTUsageHeadersSnapshot({}, 1);
+    expect(result?.fiveHour.usedPercent).toBe(5);
+    expect(result?.weekly.kind).toBe("missing");
+  });
+});
+
+describe("buildFiveHourUsagePart", () => {
+  test("formats percentage and reset suffix", () => {
+    const now = 1_800_000_000_000;
+    const part = buildFiveHourUsagePart(
+      { kind: "ok", usedPercent: 12, resetsAt: now + 2 * HOUR_MS, error: null },
+      now,
+      200,
+    );
+    expect(part).toContain("5h");
+    expect(part).toContain("12.0%");
+    expect(part).toContain("resets in");
+  });
+
+  test("renders explicit loading state", () => {
+    expect(buildFiveHourUsagePart({ kind: "loading", usedPercent: null, resetsAt: null, error: null }))
+      .toBe("5h … · 正在获取");
+  });
+
+  test("renders missing state", () => {
+    expect(buildFiveHourUsagePart({ kind: "missing", usedPercent: null, resetsAt: null, error: null }))
+      .toBe("5h 5h limit not reported");
+  });
+
+  test("renders a full pacing bar at wide widths", () => {
+    const now = 1_800_000_000_000;
+    const part = buildFiveHourUsagePart(
+      { kind: "ok", usedPercent: 50, resetsAt: now + 5 * HOUR_MS, error: null },
+      now,
+      200,
+    );
+    expect(part).toContain("━");
+    expect(part).toContain("50.0% / 0.0%");
   });
 });

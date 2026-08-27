@@ -81,15 +81,15 @@ primary 和 secondary 将被视为无固定周期语义的窗口槽位。extensi
 - `session_start` initiates the first active usage refresh. Each Codex `agent_end` initiates another refresh. `agent_start` may refresh rendering state but must not issue an active usage request.
 - Active usage refreshes are single-flight. A trigger that arrives during an existing request receives the same promise and does not queue another request after it completes.
 - The response-header path will reuse OMP's public Codex rate-limit-header parser instead of maintaining a secondary-only parser.
-- Both active reports and response-header reports pass through one main-chat weekly-window selector. The selector evaluates primary and secondary main-chat windows and excludes feature-specific additional limits.
-- A window is weekly only when its reported duration is within ±5% of seven days: 9,576 through 10,584 minutes, equivalently the matching millisecond range. Slot name alone is never sufficient.
-- When more than one eligible main-chat weekly window exists, the selector chooses the window whose duration is closest to exactly seven days; an exact tie follows provider order.
-- A valid report with no eligible weekly window produces a stable `weekly limit not reported` state rather than hiding the component or choosing another duration.
+- Both active reports and response-header reports pass through one shared main-chat window selector for the 5h and 7d windows. The selector evaluates primary and secondary main-chat windows and excludes feature-specific additional limits.
+- A window is five-hour only when its reported duration is within ±5% of five hours; a window is weekly only within ±5% of seven days. Slot name alone is never sufficient.
+- When more than one eligible main-chat window of the same duration family exists, the selector chooses the one whose duration is closest to the canonical duration; exact ties follow provider order.
+- A valid report with no eligible window for a duration family produces a stable `5h limit not reported` / `weekly limit not reported` state rather than hiding the component or choosing another duration.
 - Percentage and reset time are independent optional facts. Missing percentage renders `--%`; missing reset time renders `重置 --`.
-- ChatGPT usage state distinguishes loading, successful API data, successful response-header data, missing-weekly data, compatibility/configuration/authentication failures, and transport failures.
-- A failed active refresh invalidates prior API-sourced data. It does not invalidate fresh response-header data from the current conversation round.
+- ChatGPT usage state distinguishes loading, successful API data, successful response-header data, missing-window data, compatibility/configuration/authentication failures, and transport failures for each window.
+- A failed active refresh invalidates prior API-sourced data for that window. It does not invalidate fresh response-header data from the current conversation round.
 - A proxy configuration error remains displayable beside header-derived data. A later successful active refresh clears the active-fetch error.
-- The initial active request renders `7d … · 正在获取` until it settles.
+- The initial active request renders `5h … · 正在获取` and `7d … · 正在获取` until it settles.
 - Request and compatibility errors render in the widget only; the extension must not call the notification surface for these states.
 - Provider fetch wrappers capture the original thrown `Error.message` before the public provider converts a failed fetch into a null report. HTTP failures without a thrown error receive a deterministic status-based error message.
 - Error text is intentionally not credential-redacted. This accepted risk includes possible exposure in screenshots, terminal logs, and captured sessions.
@@ -131,7 +131,7 @@ primary 和 secondary 将被视为无固定周期语义的窗口槽位。extensi
 - Supporting API-key-only Codex authentication for the ChatGPT account usage endpoint.
 - Supporting OMP versions that do not expose the required OAuth, usage-provider, header-parser, and proxy APIs.
 - Copying or independently maintaining the OpenAI backend usage JSON parser.
-- Displaying feature-specific additional limits, reset-credit counts, 5-hour limits, daily limits, monthly limits, or annual limits.
+- Displaying feature-specific additional limits, reset-credit counts, daily limits, monthly limits, or annual limits.
 - Persisting weekly usage or error state across OMP process restarts.
 - Retrying failed usage requests or queuing a trailing refresh after a shared in-flight request.
 - Adding popup notifications for usage-loading or usage-error states.

@@ -143,7 +143,7 @@ Model Cost Tracker 当前在 ChatGPT/Codex 模式下显示 `7d N%`、重置倒�
 - Changing the existing context-budget progress bar or its thresholds.
 - Changing DeepSeek pricing, balances, daily archives, token accounting, Total/Turn calculations, or segmented cost rendering.
 - Changing weekly-window selection, primary/secondary handling, additional-limit handling, active-account selection, OAuth behavior, provider proxy behavior, timeout behavior, or single-flight behavior.
-- Displaying five-hour, daily, monthly, annual, reset-credit, Spark, or other additional usage limits.
+- Displaying daily, monthly, annual, reset-credit, Spark, or other additional usage limits.
 - Modifying OMP core or publishing a new generic OMP ProgressBar API.
 - Deep-importing OMP's internal progress helpers or status-line implementation.
 - Persisting time progress, render state, or stale weekly values across OMP restarts.

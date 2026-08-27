@@ -5,7 +5,7 @@
  * The cache is intentionally not persisted; it lives for the extension load.
  */
 
-import type { ChatGPTUsageState } from "./tracker-state";
+import type { ChatGPTUsageSnapshot } from "./tracker-state";
 
 export const CACHE_TTL_MS = 30_000;
 
@@ -16,7 +16,7 @@ export interface CacheEntry<T> {
 
 export interface BalanceCache {
   deepSeek: CacheEntry<number>;
-  codex: CacheEntry<ChatGPTUsageState>;
+  codex: CacheEntry<ChatGPTUsageSnapshot>;
 }
 
 export function createBalanceCache(): BalanceCache {
