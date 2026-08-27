@@ -274,6 +274,17 @@ describe("formatReset", () => {
     const now = 1_800_000_000_000;
     expect(formatReset(now - 1000, now)).toMatch(/^0h \(\d{2}\/\d{2} \d{2}:\d{2}\)$/);
   });
+
+  test("formats minute-precise countdown when requested", () => {
+    const now = 1_800_000_000_000;
+    const resetsAt = now + 2 * HOUR_MS + 5 * 60 * 1000;
+    expect(formatReset(resetsAt, now, true)).toMatch(/^2h 5m \(\d{2}\/\d{2} \d{2}:\d{2}\)$/);
+  });
+
+  test("returns 0m for past reset when minute precision is requested", () => {
+    const now = 1_800_000_000_000;
+    expect(formatReset(now - 1000, now, true)).toMatch(/^0m \(\d{2}\/\d{2} \d{2}:\d{2}\)$/);
+  });
 });
 
 describe("buildWeeklyUsagePart", () => {
@@ -286,6 +297,17 @@ describe("buildWeeklyUsagePart", () => {
     expect(part).toContain("7d");
     expect(part).toContain("34.4% / 85.7%");
     expect(part).toContain("resets in");
+  });
+
+  test("keeps weekly countdown at hour precision", () => {
+    const now = 1_800_000_000_000;
+    const resetsAt = now + 2 * DAY_MS + 14 * HOUR_MS + 5 * 60 * 1000;
+    const part = buildWeeklyUsagePart(
+      { kind: "ok", usedPercent: 34.4, resetsAt, error: null },
+      now,
+    );
+    expect(part).toContain("resets in 2d 14h");
+    expect(part).not.toContain("2d 14h 5m");
   });
 
   test("returns empty string when usage is unavailable", () => {
@@ -1111,6 +1133,27 @@ describe("buildFiveHourUsagePart", () => {
     expect(part).toContain("5h");
     expect(part).toContain("12.0%");
     expect(part).toContain("resets in");
+  });
+
+  test("renders minute-precise reset countdown", () => {
+    const now = 1_800_000_000_000;
+    const part = buildFiveHourUsagePart(
+      { kind: "ok", usedPercent: 12, resetsAt: now + 2 * HOUR_MS + 5 * 60 * 1000, error: null },
+      now,
+      200,
+    );
+    expect(part).toContain("resets in 2h 5m");
+    expect(part).not.toContain("resets in 3h");
+  });
+
+  test("rounds sub-minute remaining time up to one minute", () => {
+    const now = 1_800_000_000_000;
+    const part = buildFiveHourUsagePart(
+      { kind: "ok", usedPercent: 12, resetsAt: now + 30 * 1000, error: null },
+      now,
+      200,
+    );
+    expect(part).toContain("resets in 1m");
   });
 
   test("renders explicit loading state", () => {

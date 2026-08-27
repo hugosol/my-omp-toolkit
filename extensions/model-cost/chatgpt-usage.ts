@@ -12,6 +12,7 @@ import type { ChatGPTUsageSnapshot, ChatGPTUsageState } from "./tracker-state";
 const CODEX_PROVIDER = "openai-codex";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
 const FIVE_HOUR_MS = 5 * HOUR_MS;
 const USAGE_TIMEOUT_MS = 10_000;
 
@@ -343,14 +344,38 @@ function isFiveHourLimit(limit: UsageLimitLike): boolean {
   );
 }
 
-/** Format reset as `2d 14h (08/20 15:00)` using the local timezone. */
-export function formatReset(resetsAt: number | null, now: number = Date.now()): string {
-  if (!resetsAt || !Number.isFinite(resetsAt)) return "";
-  const diff = resetsAt - now;
-  if (diff < 0) return `0h (${formatLocalTime(resetsAt)})`;
+function formatHourCountdown(diff: number): string {
+  if (diff < 0) return "0h";
   const days = Math.floor(diff / DAY_MS);
   const hours = Math.floor((diff % DAY_MS) / HOUR_MS);
-  const countdown = days > 0 ? `${days}d ${hours}h` : `${Math.max(1, Math.ceil(diff / HOUR_MS))}h`;
+  return days > 0 ? `${days}d ${hours}h` : `${Math.max(1, Math.ceil(diff / HOUR_MS))}h`;
+}
+
+function formatMinuteCountdown(diff: number): string {
+  if (diff < 0) return "0m";
+  const totalMinutes = Math.floor(diff / MINUTE_MS);
+  if (diff > 0 && totalMinutes === 0) {
+    return "1m";
+  }
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  return parts.length > 0 ? parts.join(" ") : "0m";
+}
+
+/** Format reset as `2d 14h (08/20 15:00)` or minute-precise `2h 5m (08/20 15:00)`. */
+export function formatReset(
+  resetsAt: number | null,
+  now: number = Date.now(),
+  includeMinutes = false,
+): string {
+  if (!resetsAt || !Number.isFinite(resetsAt)) return "";
+  const diff = resetsAt - now;
+  const countdown = includeMinutes ? formatMinuteCountdown(diff) : formatHourCountdown(diff);
   return `${countdown} (${formatLocalTime(resetsAt)})`;
 }
 
@@ -385,6 +410,7 @@ function buildWindowUsagePart(
   label: string,
   durationMs: number,
   missingText: string,
+  includeMinutes = false,
 ): string {
   const kind = usage.kind;
   if (kind === "idle") return "";
@@ -401,7 +427,7 @@ function buildWindowUsagePart(
 
   const pct = usage.usedPercent;
   if (pct === null || !Number.isFinite(pct)) {
-    const reset = buildResetText(usage.resetsAt, now, durationMs);
+    const reset = buildResetText(usage.resetsAt, now, durationMs, includeMinutes);
     const parts = [`${label} --%`];
     if (reset) parts.push(reset);
     if (usage.error) parts.push(formatErrorText(usage.error));
@@ -417,9 +443,9 @@ function buildWindowUsagePart(
   const styledQuotaLabel = theme.fg(status, quotaLabel);
   const timeLabel = timePct === null ? "--" : timePct.toFixed(1);
   const bar = buildPacingBar(pct, timePct, status, theme);
-  const resetFull = buildResetText(usage.resetsAt, now, durationMs);
+  const resetFull = buildResetText(usage.resetsAt, now, durationMs, includeMinutes);
   const resetCountdown = resetState.valid
-    ? `resets in ${formatCountdown(usage.resetsAt!, now)}`
+    ? `resets in ${formatCountdown(usage.resetsAt!, now, includeMinutes)}`
     : null;
 
   const candidates = [
@@ -458,7 +484,7 @@ export function buildFiveHourUsagePart(
   width: number = 120,
   theme: WeeklyThemeLike = IDENTITY_THEME,
 ): string {
-  return buildWindowUsagePart(usage, now, width, theme, "5h", FIVE_HOUR_MS, "5h limit not reported");
+  return buildWindowUsagePart(usage, now, width, theme, "5h", FIVE_HOUR_MS, "5h limit not reported", true);
 }
 
 function getResetState(
@@ -478,20 +504,18 @@ function buildResetText(
   resetsAt: number | null | undefined,
   now: number,
   durationMs: number,
+  includeMinutes = false,
 ): string | null {
   const state = getResetState(resetsAt, now, durationMs);
-  if (state.valid) return `resets in ${formatReset(resetsAt!, now)}`;
+  if (state.valid) return `resets in ${formatReset(resetsAt!, now, includeMinutes)}`;
   if (state.kind === "unknown") return "reset unknown";
   if (state.kind === "expired") return `reset expired (${formatLocalTime(resetsAt!)})`;
   return `reset invalid (${formatLocalTime(resetsAt!)})`;
 }
 
-function formatCountdown(resetsAt: number, now: number): string {
+function formatCountdown(resetsAt: number, now: number, includeMinutes = false): string {
   const diff = resetsAt - now;
-  if (diff < 0) return "0h";
-  const days = Math.floor(diff / DAY_MS);
-  const hours = Math.floor((diff % DAY_MS) / HOUR_MS);
-  return days > 0 ? `${days}d ${hours}h` : `${Math.max(1, Math.ceil(diff / HOUR_MS))}h`;
+  return includeMinutes ? formatMinuteCountdown(diff) : formatHourCountdown(diff);
 }
 
 function pacingColor(delta: number): "text" | "success" | "warning" | "error" {

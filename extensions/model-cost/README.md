@@ -12,7 +12,7 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 - **余额查询** — 自动查询 DeepSeek 账户余额
 - **Token-only 模式** — 当 `deepseek-v4-pro` / `deepseek-v4-flash` 模型经由其它 provider（如 opencode-go）提供时，只显示上下文进度条和 token 统计，不使用 RMB 计费、余额或每日累计；`deepseek-v4-flash-vision-exp` 仅在官方 deepseek provider 下识别
 - **双数据源 TTL 缓存** — 输入 `/model`、`/models`、`/switch` 时预取 DeepSeek 余额和 Codex 周额度，30 秒内不重复请求；UI 仍按当前模型展示对应缓存值
-- **ChatGPT/Codex 5h/7d 双额度节奏条** — 当当前模型为 `openai-codex` OAuth 模型时，同时显示 5 小时和 7 天两个额度窗口；每个窗口用 20 格单轴进度条编码已用额度和周期时间进度，显示 `quota% / time%`、重置倒计时和绝对时间
+- **ChatGPT/Codex 5h/7d 双额度节奏条** — 当当前模型为 `openai-codex` OAuth 模型时，同时显示 5 小时和 7 天两个额度窗口；每个窗口用 20 格单轴进度条编码已用额度和周期时间进度，显示 `quota% / time%`、重置倒计时和绝对时间（5h 倒计时精确到分钟，7d 保持小时）
 - **ChatGPT/Codex 费用** — 使用 OMP catalog 中的动态 USD 价格计算 CacheRead/In/CacheWrite/Out 四路比例、Total/Turn 估计费用；不显示 DeepSeek 余额和每日累计
 
 ## 定价
@@ -36,7 +36,7 @@ DeepSeek 费用分支仅在 provider 为 `deepseek` 且模型 ID 命中以上模
 
 当当前模型 provider 为 `openai-codex` 时，扩展切换到 ChatGPT/Codex 模式：
 
-- 显示固定 272K 预算的上下文进度条 + 5h/7d 双额度节奏条。5h 窗口以 `5h` 开头，7d 窗口以 `7d` 开头；每个窗口各用 20 格单轴进度条：`━` 已用额度、`─` 未用额度、`│` 当前周期时间位置，以及 `quota% / time%`、重置倒计时和绝对时间。
+- 显示固定 272K 预算的上下文进度条 + 5h/7d 双额度节奏条。5h 窗口以 `5h` 开头，7d 窗口以 `7d` 开头；每个窗口各用 20 格单轴进度条：`━` 已用额度、`─` 未用额度、`│` 当前周期时间位置，以及 `quota% / time%`、重置倒计时和绝对时间。5h 重置倒计时精确到分钟（如 `2h 5m`），7d 仍精确到小时（如 `2d 14h`）。
 - Total/Turn 显示输入缓存命中率、`CacheRead/In/CacheWrite/Out` 四路费用比例、`Sum`（含 orchestration）和 USD 估计费用。
 - 费用动态读取 `ctx.model.cost`（USD / 百万 tokens），不硬编码；模型缺少 cost 时隐藏费用相关列。
 - 不显示 DeepSeek 余额、每日累计花费和分段条。
@@ -45,7 +45,7 @@ DeepSeek 费用分支仅在 provider 为 `deepseek` 且模型 ID 命中以上模
 - 首次加载显示 `5h … · 正在获取` 和 `7d … · 正在获取`；代理缺失、认证失败、传输失败、OMP 版本不兼容都只在 widget 内展示错误摘要，不弹通知。
 - 主动用量刷新为 single-flight：`/model`、`/models`、`/switch` 输入时按 30s TTL 预取 DeepSeek 余额和 Codex 5h/7d 额度；`agent_start` / `session_start` 只在当前模型对应缓存缺失或过期时拉取；`agent_end` 强制刷新当前模型对应值。`message_end` 不新增主动 API 请求，实时性由响应头承担。
 
-每个额度窗口分别使用固定周期模型：5h 周期起点为报告重置时间减去恰好 5 小时，7d 周期起点为报告重置时间减去恰好 7 天；`time%` 由当前渲染时刻计算。额度相对时间的超前百分点决定粗线和额度数字的语义颜色：落后或持平用 `text`，0–15 个百分点用 `success`，15–30 用 `warning`，超过 30 用 `error`；无法取得有效重置时间时整条额度使用 `muted` 并显示 `quota% / --`。时间未知、已过期、超过周期无效分别显示 `reset unknown`、`reset expired (<local>)`、`reset invalid (<local>)`。窄终端按顺序移除 20 格条、绝对重置时间、重置倒计时，最后保留 `5h quota% / time%` / `7d quota% / time%`，仍放不下时才做 ANSI-aware 右截断；整段始终单行。渲染不新增定时器、不发起额外额度请求。
+每个额度窗口分别使用固定周期模型：5h 周期起点为报告重置时间减去恰好 5 小时，7d 周期起点为报告重置时间减去恰好 7 天；`time%` 由当前渲染时刻计算。额度相对时间的超前百分点决定粗线和额度数字的语义颜色：落后或持平用 `text`，0–15 个百分点用 `success`，15–30 用 `warning`，超过 30 用 `error`；无法取得有效重置时间时整条额度使用 `muted` 并显示 `quota% / --`。时间未知、已过期、超过周期无效分别显示 `reset unknown`、`reset expired (<local>)`、`reset invalid (<local>)`。5h 窗口的重置倒计时使用分钟精度（不足 1 分钟时按 `1m` 显示），7d 窗口仍使用小时精度。窄终端按顺序移除 20 格条、绝对重置时间、重置倒计时，最后保留 `5h quota% / time%` / `7d quota% / time%`，仍放不下时才做 ANSI-aware 右截断；整段始终单行。渲染不新增定时器、不发起额外额度请求。
 
 进度条预算只是显示和颜色告警使用的分母，不会限制模型请求、修改输出上限或触发上下文压缩。扩展有意不采用模型目录或 `getContextUsage()` 返回的动态 `contextWindow`。
 
