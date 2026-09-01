@@ -55,7 +55,6 @@ import {
   buildWeeklyUsagePart,
   buildFiveHourUsagePart,
   parseChatGPTUsageHeadersSnapshot,
-  visibleDisplayWidth,
 } from "./chatgpt-usage";
 
 // ============================================================================
@@ -148,25 +147,17 @@ function buildChatGPTWidgetLines(
   const budget = CHATGPT_BUDGET;
   const bar = buildBar(state.lastContextTokens, budget);
 
-  const parts: string[] = [];
-  let prefixWidth = 0;
-  if (bar && state.lastContextTokens !== null) {
-    const coloredBar = colorBar(bar, state.lastContextTokens, budget, theme);
-    parts.push(coloredBar);
-    prefixWidth = visibleDisplayWidth(coloredBar);
-  }
-  const quotaWidth = Math.max(0, width - (parts.length > 0 ? prefixWidth + 2 : 0));
-  const separatorWidth = 2;
-  const fiveHourWidth = Math.max(0, Math.floor((quotaWidth - separatorWidth) / 2));
-  const weeklyWidth = Math.max(0, quotaWidth - separatorWidth - fiveHourWidth);
-  const now = Date.now();
-  const fiveHour = buildFiveHourUsagePart(state.chatgptFiveHour, now, fiveHourWidth, theme);
-  const weekly = buildWeeklyUsagePart(state.chatgpt, now, weeklyWidth, theme);
-  const quotaParts = [fiveHour, weekly].filter((part): part is string => part.length > 0);
-  if (quotaParts.length > 0) parts.push(quotaParts.join("  "));
-
   const lines: string[] = [];
-  if (parts.length > 0) lines.push(parts.join("  "));
+  if (bar && state.lastContextTokens !== null) {
+    lines.push(colorBar(bar, state.lastContextTokens, budget, theme));
+  }
+
+  const now = Date.now();
+  const fiveHour = buildFiveHourUsagePart(state.chatgptFiveHour, now, width, theme);
+  if (fiveHour) lines.push(fiveHour);
+
+  const weekly = buildWeeklyUsagePart(state.chatgpt, now, width, theme);
+  if (weekly) lines.push(weekly);
 
   const cost = ctx.model?.cost as ModelCost | undefined;
   const totalUsage = {

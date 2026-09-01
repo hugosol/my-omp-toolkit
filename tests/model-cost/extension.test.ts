@@ -401,9 +401,9 @@ describe("model-cost extension", () => {
 
     await fire(handlers, "session_start", ctx);
 
-    const last = widgetCalls[widgetCalls.length - 1]?.[0] ?? "";
-    expect(last).toContain("34.0%");
-    expect(last).toContain("resets in");
+    const last = widgetCalls[widgetCalls.length - 1] ?? [];
+    expect(last.join("\n")).toContain("34.0%");
+    expect(last.join("\n")).toContain("resets in");
   });
 });
 
@@ -423,9 +423,9 @@ describe("model-cost Codex usage lifecycle", () => {
     await fire(handlers, "session_start", ctx);
 
     expect(calls).toBe(1);
-    expect(widgetCalls.some(lines => lines?.[0]?.includes("正在获取"))).toBe(true);
-    const last = widgetCalls[widgetCalls.length - 1]?.[0] ?? "";
-    expect(last).toContain("34.0%");
+    expect(widgetCalls.some(lines => lines?.some(line => line.includes("正在获取")))).toBe(true);
+    const last = widgetCalls[widgetCalls.length - 1] ?? [];
+    expect(last.join("\n")).toContain("34.0%");
   });
 
   test("agent_start starts one active usage request", async () => {
@@ -516,11 +516,11 @@ describe("model-cost Codex usage lifecycle", () => {
       ctx,
     );
 
-    const last = widgetCalls[widgetCalls.length - 1]?.[0] ?? "";
-    expect(last).toContain("5h");
-    expect(last).toContain("20.0%");
-    expect(last).toContain("7d");
-    expect(last).toContain("55.0%");
+    const last = widgetCalls[widgetCalls.length - 1] ?? [];
+    expect(last.join("\n")).toContain("5h");
+    expect(last.join("\n")).toContain("20.0%");
+    expect(last.join("\n")).toContain("7d");
+    expect(last.join("\n")).toContain("55.0%");
   });
 
   test("message_end does not start an active usage request", async () => {
@@ -574,9 +574,9 @@ describe("model-cost Codex usage lifecycle", () => {
     fail = true;
     await fire(handlers, "agent_end", ctx);
 
-    const last = widgetCalls[widgetCalls.length - 1]?.[0] ?? "";
-    expect(last).toContain("50.0%");
-    expect(last).toContain("usage request failed");
+    const last = widgetCalls[widgetCalls.length - 1] ?? [];
+    expect(last.join("\n")).toContain("50.0%");
+    expect(last.join("\n")).toContain("usage request failed");
   });
 
   test("missing proxy renders config error without notification", async () => {
@@ -586,8 +586,8 @@ describe("model-cost Codex usage lifecycle", () => {
 
     await fire(handlers, "session_start", ctx);
 
-    const last = widgetCalls[widgetCalls.length - 1]?.[0] ?? "";
-    expect(last).toContain("PI_PROXY_OPENAI_CODEX");
+    const last = widgetCalls[widgetCalls.length - 1] ?? [];
+    expect(last.join("\n")).toContain("PI_PROXY_OPENAI_CODEX");
     expect(notifyCalls.length).toBe(0);
   });
 
@@ -600,7 +600,7 @@ describe("model-cost Codex usage lifecycle", () => {
 
     await fire(handlers, "session_start", ctx);
 
-    expect(widgetCalls.some(lines => lines?.[0]?.includes("incompatible OMP version"))).toBe(true);
+    expect(widgetCalls.some(lines => lines?.some(line => line.includes("incompatible OMP version")))).toBe(true);
   });
 
   test("successful refresh clears prior transport error", async () => {
@@ -616,14 +616,14 @@ describe("model-cost Codex usage lifecycle", () => {
     fail = false;
     await fire(handlers, "agent_end", ctx);
 
-    const last = widgetCalls[widgetCalls.length - 1]?.[0] ?? "";
-    expect(last).toContain("34.0%");
-    expect(last).not.toContain("usage request failed");
+    const last = widgetCalls[widgetCalls.length - 1] ?? [];
+    expect(last.join("\n")).toContain("34.0%");
+    expect(last.join("\n")).not.toContain("usage request failed");
   });
 });
 
 describe("model-cost weekly pacing widget", () => {
-  test("renders combined pacing bar through the component factory", async () => {
+  test("renders context, 5h, and 7d progress bars on separate lines", async () => {
     process.env.PI_PROXY = "http://generic-proxy";
     installFakeCodexModules({ fetchUsage: async () => weeklyReport(60) });
     const { handlers } = mountExtension();
@@ -632,10 +632,14 @@ describe("model-cost weekly pacing widget", () => {
     await fire(handlers, "session_start", ctx);
 
     const lines = renderLastWidget(widgetContents, 300);
-    expect(lines[0]).toContain("5h");
-    expect(lines[0]).toContain("7d");
-    expect(lines[0]).toContain("━");
-    expect(lines[0]).toContain("60.0% /");
+    expect(lines[0]).toContain("136.0K/272.0K");
+    expect(lines[0]).not.toContain("5h");
+    expect(lines[0]).not.toContain("7d");
+    expect(lines[1]).toContain("5h");
+    expect(lines[1]).not.toContain("7d");
+    expect(lines[2]).toContain("7d");
+    expect(lines[2]).toContain("━");
+    expect(lines[2]).toContain("60.0% /");
     expect(lines.some(line => line.includes("Total:"))).toBe(true);
   });
 
@@ -653,10 +657,10 @@ describe("model-cost weekly pacing widget", () => {
     await fire(handlers, "session_start", ctx);
 
     const lines = renderLastWidget(widgetContents, 500, theme);
-    expect(lines[0]).toContain("[success]━[/success]");
-    expect(lines[0]).toContain("[success]40.0[/success]%");
-    expect(lines[0]).not.toContain("[success]│[/success]");
-    expect(lines[0]).not.toContain("[success]─[/success]");
+    expect(lines[2]).toContain("[success]━[/success]");
+    expect(lines[2]).toContain("[success]40.0[/success]%");
+    expect(lines[2]).not.toContain("[success]│[/success]");
+    expect(lines[2]).not.toContain("[success]─[/success]");
   });
 
   test("drops the bar before precise percentages on narrow widths", async () => {
@@ -668,11 +672,11 @@ describe("model-cost weekly pacing widget", () => {
     await fire(handlers, "session_start", ctx);
 
     const wide = renderLastWidget(widgetContents, 300);
-    expect(wide[0]).toContain("━");
+    expect(wide[2]).toContain("━");
 
-    const narrow = renderLastWidget(widgetContents, 70);
-    expect(narrow[0]).not.toContain("━");
-    expect(narrow[0]).toContain("60.0% /");
+    const narrow = renderLastWidget(widgetContents, 30);
+    expect(narrow[2]).not.toContain("━");
+    expect(narrow[2]).toContain("60.0% /");
     expect(narrow.length).toBe(wide.length);
   });
 
@@ -694,12 +698,12 @@ describe("model-cost weekly pacing widget", () => {
     try {
       await fire(handlers, "session_start", ctx);
       const first = renderLastWidget(widgetContents, 120);
-      expect(first[0]).toContain("10.0% / 0.0%");
+      expect(first[2]).toContain("10.0% / 0.0%");
 
       Date.now = () => fakeNow + WEEK * 0.5;
       await fire(handlers, "agent_start", ctx);
       const second = renderLastWidget(widgetContents, 120);
-      expect(second[0]).toContain("10.0% / 50.0%");
+      expect(second[2]).toContain("10.0% / 50.0%");
       expect(calls).toBe(2);
     } finally {
       Date.now = originalNow;
