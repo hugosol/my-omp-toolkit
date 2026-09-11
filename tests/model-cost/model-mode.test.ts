@@ -14,8 +14,8 @@ describe("classifyModelMode", () => {
 
   test("treats deepseek-v4-flash-vision-exp as flash only on official DeepSeek provider", () => {
     expect(priceForModel("deepseek-v4-flash-vision-exp")).toEqual({
-      peak: { input: 3, cacheRead: 0.1, output: 9 },
-      offPeak: { input: 1.5, cacheRead: 0.05, output: 4.5 },
+      peak: { input: 2, cacheRead: 0.04, output: 8 },
+      offPeak: { input: 1, cacheRead: 0.02, output: 4 },
     });
     expect(classifyModelMode({ id: "deepseek-v4-flash-vision-exp", provider: "deepseek" })).toBe("deepseek");
     expect(classifyModelMode({ id: "deepseek-v4-flash-vision-exp", provider: "opencode-go" })).toBe("hidden");

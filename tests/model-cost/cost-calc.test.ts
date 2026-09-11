@@ -19,8 +19,8 @@ import {
 
 const PRO_PEAK = { input: 9, cacheRead: 0.3, output: 27 };
 const PRO_OFF_PEAK = { input: 4.5, cacheRead: 0.15, output: 13.5 };
-const FLASH_PEAK = { input: 3, cacheRead: 0.1, output: 9 };
-const FLASH_OFF_PEAK = { input: 1.5, cacheRead: 0.05, output: 4.5 };
+const FLASH_PEAK = { input: 2, cacheRead: 0.04, output: 8 };
+const FLASH_OFF_PEAK = { input: 1, cacheRead: 0.02, output: 4 };
 
 // ============================================================
 // PRICE_RMB_PER_1M
@@ -270,20 +270,20 @@ describe("rmbCost", () => {
   });
 
   test("calculates flash off-peak input-only cost", () => {
-    expect(rmbCost(1_000_000, 0, 0, FLASH_OFF_PEAK)).toBe(1.5);
+    expect(rmbCost(1_000_000, 0, 0, FLASH_OFF_PEAK)).toBe(1);
   });
 
   test("calculates flash off-peak output-only cost", () => {
-    expect(rmbCost(0, 0, 1_000_000, FLASH_OFF_PEAK)).toBe(4.5);
+    expect(rmbCost(0, 0, 1_000_000, FLASH_OFF_PEAK)).toBe(4);
   });
 
   test("calculates flash off-peak cache-read cost", () => {
-    expect(rmbCost(0, 1_000_000, 0, FLASH_OFF_PEAK)).toBe(0.05);
+    expect(rmbCost(0, 1_000_000, 0, FLASH_OFF_PEAK)).toBe(0.02);
   });
 
   test("calculates mixed cost for flash off-peak", () => {
-    // 500K input (0.75) + 200K cache (0.01) + 100K output (0.45) = 1.21
-    expect(rmbCost(500_000, 200_000, 100_000, FLASH_OFF_PEAK)).toBeCloseTo(1.21, 6);
+    // 500K input (0.5) + 200K cache (0.004) + 100K output (0.4) = 0.904
+    expect(rmbCost(500_000, 200_000, 100_000, FLASH_OFF_PEAK)).toBeCloseTo(0.904, 6);
   });
 
   test("handles fractional tokens gracefully", () => {
@@ -394,11 +394,11 @@ describe("buildStatusLine", () => {
 
   test("cost reflects the model tier", () => {
     // usage: 100K input + 50K cache + 20K output
-    // flash off-peak: 0.15 + 0.0025 + 0.09 = 0.2425 -> "¥0.24"
+    // flash off-peak: 0.1 + 0.001 + 0.08 = 0.181 -> "¥0.18"
     // pro peak: 0.9 + 0.015 + 0.54 = 1.455 -> "¥1.46"
     const flashLine = buildStatusLine(usage, false, true, FLASH_OFF_PEAK);
     const proLine = buildStatusLine(usage, false, true, PRO_PEAK);
-    expect(flashLine).toContain("\u00A50.24");
+    expect(flashLine).toContain("\u00A50.18");
     expect(proLine).toContain("\u00A51.46");
   });
 

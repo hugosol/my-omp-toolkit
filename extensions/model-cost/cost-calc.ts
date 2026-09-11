@@ -2,6 +2,7 @@
  * Cost calculation and token formatting — pure functions, no I/O.
  * Pricing follows the official DeepSeek price list (RMB per million tokens)
  * with Beijing peak/off-peak time-of-day rates; weekends are all-day off-peak.
+ * Flash-series rates reflect the 2026-09-10 12:00 Beijing time price adjustment.
  */
 
 export interface PriceTier {
@@ -15,9 +16,10 @@ export interface PriceSchedule {
   offPeak: PriceTier;
 }
 
+/** Flash series — deepseek-v4-flash and deepseek-v4-flash-vision-exp (2026-09-10 12:00 Beijing rates). */
 const FLASH_SCHEDULE: PriceSchedule = {
-  peak: { input: 3, cacheRead: 0.1, output: 9 },
-  offPeak: { input: 1.5, cacheRead: 0.05, output: 4.5 },
+  peak: { input: 2, cacheRead: 0.04, output: 8 },
+  offPeak: { input: 1, cacheRead: 0.02, output: 4 },
 };
 
 export const PRICE_RMB_PER_1M: Record<string, PriceSchedule> = {

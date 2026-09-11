@@ -17,16 +17,16 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 
 ## 定价
 
-基于 DeepSeek 官方价格表（RMB / 百万 tokens）。工作日高峰时段为北京时间 `[09:00, 12:00]` 和 `[14:00, 18:00]`（闭区间，边界按高峰计）；周末（周六、周日）全天不区分峰谷，统一按空闲（低谷）时段价格计费。
+基于 DeepSeek 官方价格表（RMB / 百万 tokens）；flash 系列自北京时间 2026-09-10 12:00 起执行新价。工作日高峰时段为北京时间 `[09:00, 12:00]` 和 `[14:00, 18:00]`（闭区间，边界按高峰计）；周末（周六、周日）全天不区分峰谷，统一按空闲（低谷）时段价格计费。
 
 | 模型 | 时段 | input（cache miss） | cacheRead（cache hit） | output |
 |------|------|------|------|------|
 | deepseek-v4-pro | 高峰 | ¥9 | ¥0.30 | ¥27 |
 | deepseek-v4-pro | 空闲 | ¥4.5 | ¥0.15 | ¥13.5 |
-| deepseek-v4-flash | 高峰 | ¥3 | ¥0.10 | ¥9 |
-| deepseek-v4-flash | 空闲 | ¥1.5 | ¥0.05 | ¥4.5 |
-| deepseek-v4-flash-vision-exp | 高峰 | ¥3 | ¥0.10 | ¥9 |
-| deepseek-v4-flash-vision-exp | 空闲 | ¥1.5 | ¥0.05 | ¥4.5 |
+| deepseek-v4-flash | 高峰 | ¥2 | ¥0.04 | ¥8 |
+| deepseek-v4-flash | 空闲 | ¥1 | ¥0.02 | ¥4 |
+| deepseek-v4-flash-vision-exp | 高峰 | ¥2 | ¥0.04 | ¥8 |
+| deepseek-v4-flash-vision-exp | 空闲 | ¥1 | ¥0.02 | ¥4 |
 
 DeepSeek 费用分支仅在 provider 为 `deepseek` 且模型 ID 命中以上模型时激活；`deepseek-v4-pro` / `deepseek-v4-flash` 经由其它 provider 进入 token-only 模式，`deepseek-v4-flash-vision-exp` 只在官方 deepseek provider 下识别；其余非 ChatGPT/Codex 模型不显示 widget、不累计费用。
 

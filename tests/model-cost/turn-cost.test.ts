@@ -7,7 +7,7 @@ import {
 } from "../../extensions/model-cost/turn-cost";
 
 const PRO_PEAK = { input: 9, cacheRead: 0.3, output: 27 };
-const FLASH_OFF_PEAK = { input: 1.5, cacheRead: 0.05, output: 4.5 };
+const FLASH_OFF_PEAK = { input: 1, cacheRead: 0.02, output: 4 };
 
 describe("createTurnCostState", () => {
   test("starts with no active tier or period and zero cost", () => {
@@ -63,8 +63,8 @@ describe("addMessageCost", () => {
     anchorRequest(state, PRO_PEAK, "peak");
     addMessageCost(state, { input: 1_000_000, cacheRead: 0, output: 0 }); // 9
     anchorRequest(state, FLASH_OFF_PEAK, "offPeak");
-    addMessageCost(state, { input: 0, cacheRead: 0, output: 1_000_000 }); // 4.5
-    expect(state.turnCost).toBeCloseTo(13.5, 6);
+    addMessageCost(state, { input: 0, cacheRead: 0, output: 1_000_000 }); // 4
+    expect(state.turnCost).toBeCloseTo(13, 6);
   });
 });
 
