@@ -268,6 +268,20 @@ describe("model-cost extension", () => {
     });
   });
 
+  test("DeepSeek V4.1 Flash (deepseek-flash) renders the DeepSeek 450K context budget", async () => {
+    await withTemporaryHome(() => {
+      const { handlers } = mountExtension();
+      const { ctx, widgetCalls } = extensionContext(
+        225_000,
+        { id: "deepseek-flash", provider: "deepseek" },
+      );
+
+      fire(handlers, "agent_start", ctx);
+
+      expect(widgetCalls[widgetCalls.length - 1]?.[0]).toContain("(225.0K/450.0K)");
+    });
+  });
+
   test("ChatGPT mode rejects budget overrides without preconfiguring DeepSeek", async () => {
     await withTemporaryHome(async () => {
       const { commands, handlers } = mountExtension();

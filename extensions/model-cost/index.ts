@@ -15,9 +15,13 @@
  * flash-series rates effective 2026-09-10 12:00 Beijing):
  *   deepseek-v4-pro:   peak input ¥9 / cache ¥0.30 / output ¥27
  *                      off-peak input ¥4.5 / cache ¥0.15 / output ¥13.5
+ *   deepseek-flash:    peak input ¥2 / cache ¥0.04 / output ¥8
+ *                      off-peak input ¥1 / cache ¥0.02 / output ¥4
  *   deepseek-v4-flash: peak input ¥2 / cache ¥0.04 / output ¥8
  *                      off-peak input ¥1 / cache ¥0.02 / output ¥4
  *   deepseek-v4-flash-vision-exp: same as deepseek-v4-flash
+ *     (deepseek-flash is the current V4.1 Flash model; the two deepseek-v4-flash*
+ *      names are retired aliases served by it at the same rates)
  *
  * Commands:
  *   /budget <N>K   — Override the DeepSeek display budget, capped at 1000K.

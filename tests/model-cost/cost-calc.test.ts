@@ -36,6 +36,11 @@ describe("PRICE_RMB_PER_1M", () => {
     expect(PRICE_RMB_PER_1M["deepseek-v4-flash"].peak).toEqual(FLASH_PEAK);
     expect(PRICE_RMB_PER_1M["deepseek-v4-flash"].offPeak).toEqual(FLASH_OFF_PEAK);
   });
+
+  test("has deepseek-flash (V4.1 Flash) peak/off-peak schedules (RMB per 1M tokens)", () => {
+    expect(PRICE_RMB_PER_1M["deepseek-flash"].peak).toEqual(FLASH_PEAK);
+    expect(PRICE_RMB_PER_1M["deepseek-flash"].offPeak).toEqual(FLASH_OFF_PEAK);
+  });
 });
 
 // ============================================================
@@ -52,6 +57,13 @@ describe("priceForModel", () => {
 
   test("returns flash schedule for deepseek-v4-flash", () => {
     expect(priceForModel("deepseek-v4-flash")).toEqual({
+      peak: FLASH_PEAK,
+      offPeak: FLASH_OFF_PEAK,
+    });
+  });
+
+  test("returns flash schedule for deepseek-flash (V4.1 Flash)", () => {
+    expect(priceForModel("deepseek-flash")).toEqual({
       peak: FLASH_PEAK,
       offPeak: FLASH_OFF_PEAK,
     });
@@ -193,6 +205,14 @@ describe("resolvePriceTier", () => {
 
   test("returns flash off-peak tier during off-peak", () => {
     expect(resolvePriceTier("deepseek-v4-flash", offPeakDate)).toEqual(FLASH_OFF_PEAK);
+  });
+
+  test("returns flash peak tier for deepseek-flash during peak", () => {
+    expect(resolvePriceTier("deepseek-flash", peakDate)).toEqual(FLASH_PEAK);
+  });
+
+  test("returns flash off-peak tier for deepseek-flash during off-peak", () => {
+    expect(resolvePriceTier("deepseek-flash", offPeakDate)).toEqual(FLASH_OFF_PEAK);
   });
 
   test("returns pro off-peak tier on Saturday 09:00 Beijing", () => {

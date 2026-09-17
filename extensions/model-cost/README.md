@@ -10,7 +10,7 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 - **每日花费追踪** — 按 session 分组统计，数据持久化到 `~/.omp/cost-archive/deepseek-cost.json`
 - **分段进度条** — 可视化每个 session 的费用占比，支持精细模式（≤ ¥20）和粗模式（> ¥20）
 - **余额查询** — 自动查询 DeepSeek 账户余额
-- **Token-only 模式** — 当 `deepseek-v4-pro` / `deepseek-v4-flash` 模型经由其它 provider（如 opencode-go）提供时，只显示上下文进度条和 token 统计，不使用 RMB 计费、余额或每日累计；`deepseek-v4-flash-vision-exp` 仅在官方 deepseek provider 下识别
+- **Token-only 模式** — 当 `deepseek-v4-pro` / `deepseek-v4-flash` 模型经由其它 provider（如 opencode-go）提供时，只显示上下文进度条和 token 统计，不使用 RMB 计费、余额或每日累计；`deepseek-v4-flash-vision-exp` 与 `deepseek-flash` 仅在官方 deepseek provider 下识别
 - **双数据源 TTL 缓存** — 输入 `/model`、`/models`、`/switch` 时预取 DeepSeek 余额和 Codex 周额度，30 秒内不重复请求；UI 仍按当前模型展示对应缓存值
 - **ChatGPT/Codex 5h/7d 双额度节奏条** — 当当前模型为 `openai-codex` OAuth 模型时，同时显示 5 小时和 7 天两个额度窗口；每个窗口用 20 格单轴进度条编码已用额度和周期时间进度，显示 `quota% / time%`、重置倒计时和绝对时间（5h 倒计时精确到分钟，7d 保持小时）
 - **ChatGPT/Codex 费用** — 使用 OMP catalog 中的动态 USD 价格计算 CacheRead/In/CacheWrite/Out 四路比例、Total/Turn 估计费用；不显示 DeepSeek 余额和每日累计
@@ -23,10 +23,14 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 |------|------|------|------|------|
 | deepseek-v4-pro | 高峰 | ¥9 | ¥0.30 | ¥27 |
 | deepseek-v4-pro | 空闲 | ¥4.5 | ¥0.15 | ¥13.5 |
+| deepseek-flash | 高峰 | ¥2 | ¥0.04 | ¥8 |
+| deepseek-flash | 空闲 | ¥1 | ¥0.02 | ¥4 |
 | deepseek-v4-flash | 高峰 | ¥2 | ¥0.04 | ¥8 |
 | deepseek-v4-flash | 空闲 | ¥1 | ¥0.02 | ¥4 |
 | deepseek-v4-flash-vision-exp | 高峰 | ¥2 | ¥0.04 | ¥8 |
 | deepseek-v4-flash-vision-exp | 空闲 | ¥1 | ¥0.02 | ¥4 |
+
+`deepseek-flash` 是现行的 DeepSeek V4.1 Flash 模型（模型版本 DeepSeek-V4.1-Flash）；`deepseek-v4-flash` 与 `deepseek-v4-flash-vision-exp` 是它的两个已下线旧名，仍可调用，但请求由 V4.1 Flash 承接，并按 Flash 价格计费。扩展为兼容既有配置继续识别这两个旧名：三者在官方 `deepseek` provider 下共用同一价格档、计费结果一致；`deepseek-flash` 与 `deepseek-v4-flash-vision-exp` 一样，仅在官方 `deepseek` provider 下识别。
 
 DeepSeek 费用分支仅在 provider 为 `deepseek` 且模型 ID 命中以上模型时激活；`deepseek-v4-pro` / `deepseek-v4-flash` 经由其它 provider 进入 token-only 模式，`deepseek-v4-flash-vision-exp` 只在官方 deepseek provider 下识别；其余非 ChatGPT/Codex 模型不显示 widget、不累计费用。
 

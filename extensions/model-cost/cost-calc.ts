@@ -16,7 +16,7 @@ export interface PriceSchedule {
   offPeak: PriceTier;
 }
 
-/** Flash series — deepseek-v4-flash and deepseek-v4-flash-vision-exp (2026-09-10 12:00 Beijing rates). */
+/** Flash series — deepseek-flash (V4.1 Flash) plus legacy aliases deepseek-v4-flash and deepseek-v4-flash-vision-exp (2026-09-10 12:00 Beijing rates). */
 const FLASH_SCHEDULE: PriceSchedule = {
   peak: { input: 2, cacheRead: 0.04, output: 8 },
   offPeak: { input: 1, cacheRead: 0.02, output: 4 },
@@ -27,6 +27,7 @@ export const PRICE_RMB_PER_1M: Record<string, PriceSchedule> = {
     peak: { input: 9, cacheRead: 0.3, output: 27 },
     offPeak: { input: 4.5, cacheRead: 0.15, output: 13.5 },
   },
+  "deepseek-flash": FLASH_SCHEDULE,
   "deepseek-v4-flash": FLASH_SCHEDULE,
   "deepseek-v4-flash-vision-exp": FLASH_SCHEDULE,
 };

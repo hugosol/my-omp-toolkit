@@ -10,6 +10,7 @@ describe("classifyModelMode", () => {
   test("classifies official DeepSeek provider with known DeepSeek model as deepseek", () => {
     expect(classifyModelMode({ id: "deepseek-v4-pro", provider: "deepseek" })).toBe("deepseek");
     expect(classifyModelMode({ id: "deepseek-v4-flash", provider: "deepseek" })).toBe("deepseek");
+    expect(classifyModelMode({ id: "deepseek-flash", provider: "deepseek" })).toBe("deepseek");
   });
 
   test("treats deepseek-v4-flash-vision-exp as flash only on official DeepSeek provider", () => {
@@ -19,6 +20,16 @@ describe("classifyModelMode", () => {
     });
     expect(classifyModelMode({ id: "deepseek-v4-flash-vision-exp", provider: "deepseek" })).toBe("deepseek");
     expect(classifyModelMode({ id: "deepseek-v4-flash-vision-exp", provider: "opencode-go" })).toBe("hidden");
+  });
+
+  test("treats deepseek-flash (V4.1 Flash) as deepseek only on the official provider", () => {
+    expect(priceForModel("deepseek-flash")).toEqual({
+      peak: { input: 2, cacheRead: 0.04, output: 8 },
+      offPeak: { input: 1, cacheRead: 0.02, output: 4 },
+    });
+    expect(classifyModelMode({ id: "deepseek-flash", provider: "deepseek" })).toBe("deepseek");
+    expect(classifyModelMode({ id: "deepseek-flash", provider: "opencode-go" })).toBe("hidden");
+    expect(isTokenOnlyDeepSeekModel({ id: "deepseek-flash", provider: "opencode-go" })).toBe(false);
   });
 
   test("classifies openai-codex provider as codex regardless of model id", () => {
@@ -40,6 +51,7 @@ describe("classifyModelMode", () => {
 describe("isDeepSeekModel", () => {
   test("is true only for official DeepSeek provider with a known DeepSeek model", () => {
     expect(isDeepSeekModel({ id: "deepseek-v4-pro", provider: "deepseek" })).toBe(true);
+    expect(isDeepSeekModel({ id: "deepseek-flash", provider: "deepseek" })).toBe(true);
     expect(isDeepSeekModel({ id: "deepseek-v4-flash", provider: "opencode-go" })).toBe(false);
     expect(isDeepSeekModel({ id: "deepseek-v4-pro", provider: "deepseek" })).toBe(true);
   });
