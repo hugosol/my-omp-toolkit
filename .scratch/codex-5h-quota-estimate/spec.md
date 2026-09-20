@@ -2,6 +2,8 @@
 
 Status: `ready-for-agent`
 
+Contract: [contract.md](./contract.md)
+
 ## Problem Statement
 
 在 ChatGPT/Codex（`openai-codex`）模式下，Model Cost Tracker 现在显示 `5h` 与 `7d` 两条额度窗口，各带一条按"额度 vs 时间"编码的 pacing 条和 `额度% / 时间%` 数值。这回答了"这周是不是用超了"，但没有回答规划用量时最关键的问题：**剩下的周额度还够我满额用几个 5h 窗口？**
@@ -91,7 +93,7 @@ R̂ 由同一 5h 窗口（且同一 7d 窗口）内的一对观测差值推得�
   ```
 
   There is deliberately no schema version field. Load-time validation checks shape and ranges (object present, five finite numbers, `0 ≤ u ≤ 100`, `ratio > 0`); a missing or invalid document is treated as a first run. The live in-progress sample (current deltas and candidate ratio) is never persisted because it is recomputable from the baseline plus the latest observation.
-- **Storage mechanics**: one state file named `codex-usage-estimate.json` in the extension's existing cost-archive directory, written through the extension's cross-process file lock and the existing temp-file + atomic-rename pattern (with the Windows rename retry). Writes are asynchronous and best-effort: a failed write keeps in-memory state and is retried at the next trigger; event handling is never blocked. Concurrent OMP instances follow last-writer-wins, and a baseline written by another instance remains valid because any within-window baseline is equivalent.
+- **Storage mechanics**: one state file named `codex-usage-estimate.json` in the extension's existing cost-archive directory, written through the extension's cross-process file lock and the existing temp-file + atomic-rename pattern (with the Windows rename retry). Writes are asynchronous and best-effort: a failed write keeps in-memory state and is retried at the next trigger; event handling is never blocked. Concurrent OMP instances publish through the shared lock with a read-compare-write merge: inside the lock the on-disk document is compared by baseline capture time (`at`), and the document with the newer baseline wins, so older state can never overwrite newer state; a within-window baseline written by another instance remains valid because it anchors the same windows.
 - **Write policy**: a baseline change writes immediately; a qualifying ratio update writes at most once per 60 seconds. No other event writes the file.
 - **Display contract**: the appended text sits between the existing `quota% / time%` numbers and the reset text, as `· left≈N.N×5h · ratio≈R.R`, one decimal, English labels, and reuses the same semantic theme color as the 7d quota number for the whole appended segment. When no ratio exists yet the segment is `· estimating…`. When either window is unavailable or its percentage is unusable, nothing is appended. At `u7 = 100%` the remaining number reads `0.0`. Credits and overage are never included.
 - **Degradation**: the existing width fallback order is unchanged (pacing bar first, then absolute reset time, then countdown). The appended numbers share the survival priority of the two percentages, so the minimal form is `7d quota% / time% · left≈N.N×5h · ratio≈R.R`; `left` precedes `ratio` so ANSI truncation drops `ratio` first.
