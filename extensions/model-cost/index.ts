@@ -61,6 +61,7 @@ import {
   buildFiveHourUsagePart,
   parseChatGPTUsageHeadersSnapshot,
 } from "./chatgpt-usage";
+import { buildQuotaEstimateSegment } from "./quota-estimate";
 
 // ============================================================================
 // Constants
@@ -161,7 +162,8 @@ function buildChatGPTWidgetLines(
   const fiveHour = buildFiveHourUsagePart(state.chatgptFiveHour, now, width, theme);
   if (fiveHour) lines.push(fiveHour);
 
-  const weekly = buildWeeklyUsagePart(state.chatgpt, now, width, theme);
+  const segment = buildQuotaEstimateSegment(state.quotaEstimate.state, state.chatgptFiveHour, state.chatgpt);
+  const weekly = buildWeeklyUsagePart(state.chatgpt, now, width, theme, segment);
   if (weekly) lines.push(weekly);
 
   const cost = ctx.model?.cost as ModelCost | undefined;
@@ -369,6 +371,7 @@ export default function modelCost(pi: ExtensionAPI): void {
   }
 
   function applyChatGPTUsageSnapshot(ctx: ExtensionContext, result: ChatGPTUsageSnapshot): void {
+    state.quotaEstimate.observe(result, Date.now());
     state.chatgpt = applyChatGPTWindowResult(state.chatgpt, result.weekly);
     state.chatgptFiveHour = applyChatGPTWindowResult(state.chatgptFiveHour, result.fiveHour);
     setCacheEntry(balanceCache.codex, {
@@ -599,6 +602,7 @@ export default function modelCost(pi: ExtensionAPI): void {
     if (!isOpenAICodexModel(ctx.model)) return;
     const headerSnapshot = await parseChatGPTUsageHeadersSnapshot(event.headers);
     if (!headerSnapshot) return;
+    state.quotaEstimate.observe(headerSnapshot, Date.now());
     state.chatgpt = applyHeaderWindowResult(state.chatgpt, headerSnapshot.weekly);
     state.chatgptFiveHour = applyHeaderWindowResult(state.chatgptFiveHour, headerSnapshot.fiveHour);
     refresh(state, daily, pi, ctx);

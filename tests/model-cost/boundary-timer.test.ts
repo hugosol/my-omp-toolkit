@@ -1,28 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
-import modelCost from "../../extensions/model-cost/index";
+import { extensionContext, mountExtension } from "./extension-harness";
 
-type EventHandler = (event: unknown, ctx: unknown) => unknown;
-
-interface ScheduledTimer {
-  id: number;
-  at: number;
-  fn: () => void | Promise<void>;
-}
-
-function mountExtension() {
-  const handlers: Record<string, EventHandler> = {};
-  const api = {
-    setLabel() {},
-    registerCommand() {},
-    on(event: string, handler: EventHandler) {
-      handlers[event] = handler;
-    },
-  };
-  modelCost(api as Parameters<typeof modelCost>[0]);
-  return { handlers };
-}
-
+/**
+ * The suite owns its fully fake clock (it swaps `globalThis.Date`) and borrows
+ * the shared mount and context helpers; deadlines are measured against the fake
+ * clock through `now`.
+ */
 function createHarness(fakeNow: Date, resolver: () => Promise<unknown> = async () => undefined) {
   const RealDate = Date;
   let current = fakeNow;
@@ -37,57 +21,11 @@ function createHarness(fakeNow: Date, resolver: () => Promise<unknown> = async (
   }
   globalThis.Date = FakeDate as typeof Date;
 
-  const timers: ScheduledTimer[] = [];
-  let nextTimerId = 1;
-  const widgetCalls: Array<string[] | undefined> = [];
-
-  const ctx = {
-    hasUI: true,
-    model: { id: "deepseek-v4-flash", provider: "deepseek" },
-    sessionManager: {
-      getSessionId: () => "s1",
-      getSessionName: () => "test",
-      getUsageStatistics: () => ({
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        orchestrationInput: 0,
-        orchestrationCacheRead: 0,
-        orchestrationOutput: 0,
-        totalTokens: 0,
-      }),
-    },
-    getContextUsage: () => ({ tokens: 1000 }),
-    modelRegistry: {
-      resolver,
-      getProviderBaseUrl: () => undefined,
-    },
-    ui: {
-      theme: { fg: (_color: string, text: string) => text },
-      setWidget(_key: string, content: unknown) {
-        if (typeof content === "function") {
-          const component = (content as (
-            _tui: unknown,
-            theme: { fg: (color: string, text: string) => string },
-          ) => { render(width: number): string[] })({}, { fg: (_color: string, text: string) => text });
-          widgetCalls.push(component.render(120));
-        } else {
-          widgetCalls.push(content as string[] | undefined);
-        }
-      },
-      notify() {},
-    },
-    setTimeout(fn: () => void | Promise<void>, ms?: number) {
-      const id = nextTimerId++;
-      timers.push({ id, at: current.getTime() + (ms ?? 0), fn });
-      return id;
-    },
-    clearTimer(id: number) {
-      const index = timers.findIndex(t => t.id === id);
-      if (index >= 0) timers.splice(index, 1);
-    },
-  };
+  const { ctx, timers, widgetCalls } = extensionContext(
+    1000,
+    { id: "deepseek-v4-flash", provider: "deepseek" },
+    { now: () => current.getTime(), resolver },
+  );
 
   function advanceTo(date: Date) {
     while (true) {
@@ -118,7 +56,7 @@ describe("model-cost boundary timer", () => {
 
     try {
       const dispatch = (event: string, payload = {}) => {
-        const handler = handlers[event];
+        const handler = handlers.get(event);
         if (!handler) throw new Error(`handler not registered: ${event}`);
         return handler(payload, ctx);
       };
@@ -158,7 +96,7 @@ describe("model-cost boundary timer", () => {
 
     try {
       const dispatch = (event: string, payload = {}) => {
-        const handler = handlers[event];
+        const handler = handlers.get(event);
         if (!handler) throw new Error(`handler not registered: ${event}`);
         return handler(payload, ctx);
       };

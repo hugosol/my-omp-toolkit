@@ -13,7 +13,7 @@ const CODEX_PROVIDER = "openai-codex";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
-const FIVE_HOUR_MS = 5 * HOUR_MS;
+export const FIVE_HOUR_MS = 5 * HOUR_MS;
 const USAGE_TIMEOUT_MS = 10_000;
 
 interface AccountLike {
@@ -398,9 +398,15 @@ const IDENTITY_THEME: WeeklyThemeLike = { fg: (_color, text) => text };
  * Build one quota window widget segment, e.g.
  * `7d ━━━│━━──── 60.0% / 30.0% · resets in 4d 21h (08/23 14:00)`.
  *
+ * `segment` is the weekly line's appended estimate text, placed between the
+ * percentages and the reset text and coloured like the quota number; it is
+ * absent from the five-hour line.
+ *
  * Width fallback follows the agreed priority: full bar + reset text, no bar +
  * reset text, no bar + countdown only, minimal percentages, then ANSI-aware
- * truncation of the minimal form. The result always stays on one physical line.
+ * truncation of the minimal form. The segment rides along with the percentages
+ * and is only lost to that final truncation. The result always stays on one
+ * physical line.
  */
 function buildWindowUsagePart(
   usage: Pick<ChatGPTUsageState, "kind" | "usedPercent" | "resetsAt" | "error">,
@@ -411,6 +417,7 @@ function buildWindowUsagePart(
   durationMs: number,
   missingText: string,
   includeMinutes = false,
+  segment: string | null = null,
 ): string {
   const kind = usage.kind;
   if (kind === "idle") return "";
@@ -448,11 +455,13 @@ function buildWindowUsagePart(
     ? `resets in ${formatCountdown(usage.resetsAt!, now, includeMinutes)}`
     : null;
 
+  const styledSegment = segment ? ` · ${theme.fg(status, segment)}` : "";
+
   const candidates = [
-    `${label} ${bar} ${styledQuotaLabel}% / ${timeLabel}%${resetFull ? ` · ${resetFull}` : ""}`,
-    `${label} ${styledQuotaLabel}% / ${timeLabel}%${resetFull ? ` · ${resetFull}` : ""}`,
-    `${label} ${styledQuotaLabel}% / ${timeLabel}%${resetCountdown ? ` · ${resetCountdown}` : ""}`,
-    `${label} ${styledQuotaLabel}% / ${timeLabel}%`,
+    `${label} ${bar} ${styledQuotaLabel}% / ${timeLabel}%${styledSegment}${resetFull ? ` · ${resetFull}` : ""}`,
+    `${label} ${styledQuotaLabel}% / ${timeLabel}%${styledSegment}${resetFull ? ` · ${resetFull}` : ""}`,
+    `${label} ${styledQuotaLabel}% / ${timeLabel}%${styledSegment}${resetCountdown ? ` · ${resetCountdown}` : ""}`,
+    `${label} ${styledQuotaLabel}% / ${timeLabel}%${styledSegment}`,
   ];
 
   let selected = "";
@@ -467,14 +476,15 @@ function buildWindowUsagePart(
   return selected;
 }
 
-/** Build the weekly (7d) usage widget segment. */
+/** Build the weekly (7d) usage widget segment, with the appended estimate segment. */
 export function buildWeeklyUsagePart(
   usage: Pick<ChatGPTUsageState, "kind" | "usedPercent" | "resetsAt" | "error">,
   now: number = Date.now(),
   width: number = 120,
   theme: WeeklyThemeLike = IDENTITY_THEME,
+  segment: string | null = null,
 ): string {
-  return buildWindowUsagePart(usage, now, width, theme, "7d", WEEK_MS, "weekly limit not reported");
+  return buildWindowUsagePart(usage, now, width, theme, "7d", WEEK_MS, "weekly limit not reported", false, segment);
 }
 
 /** Build the five-hour (5h) usage widget segment. */

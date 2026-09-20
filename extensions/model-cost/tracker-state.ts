@@ -4,6 +4,7 @@
  */
 
 import { createTurnCostState, type TurnCostState } from "./turn-cost";
+import { createQuotaEstimateStore, type QuotaEstimateStore } from "./quota-estimate-store";
 
 export const DEFAULT_DEEPSEEK_BUDGET = 450_000;
 
@@ -76,6 +77,11 @@ export interface TrackerState {
   chatgpt: ChatGPTUsageState;
   /** ChatGPT/Codex five-hour usage for the active OAuth account. */
   chatgptFiveHour: ChatGPTUsageState;
+  /**
+   * Learned Codex quota-ratio estimate, fed only by paired usage readings and
+   * continued from `codex-usage-estimate.json` in the shared cost archive.
+   */
+  quotaEstimate: QuotaEstimateStore;
 }
 
 export function createTrackerState(): TrackerState {
@@ -97,5 +103,6 @@ export function createTrackerState(): TrackerState {
     turnCost: createTurnCostState(),
     chatgpt: { kind: "idle", usedPercent: null, resetsAt: null, fetchedAt: null },
     chatgptFiveHour: { kind: "idle", usedPercent: null, resetsAt: null, fetchedAt: null },
+    quotaEstimate: createQuotaEstimateStore(),
   };
 }
