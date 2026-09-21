@@ -79,9 +79,26 @@ interface CodexLimit {
   amount: { used: number; limit: number; unit: string };
 }
 
+/** One window as the readable document carries it. */
+interface DocumentWindow {
+  usedPercent: number;
+  resetsAt: string | null;
+}
+
+/** The written shape: a readable baseline pair, then the stored estimate. */
 interface EstimateDocument {
-  base: { u5: number; u7: number; r5: number | null; r7: number | null; at: number };
+  baseline: {
+    capturedAt: string;
+    fiveHour: DocumentWindow;
+    weekly: DocumentWindow;
+  };
   ratio: number;
+}
+
+/** The same measurement in the estimator's internal epoch-ms terms. */
+interface InternalEstimate {
+  base: { u5: number; u7: number; r5: number | null; r7: number | null; at: number };
+  ratio: number | null;
 }
 
 /**
@@ -100,8 +117,8 @@ function usageReport(windows: PairedWindows) {
     id,
     scope: { accountId: "acct-1", windowId },
     window: { id: windowId, durationMs, ...(resetsAt === null ? {} : { resetsAt }) },
-    // Whole percentages, never a fraction: the document's six numbers are then
-    // exactly the percentages each reading scripts, so they can be asserted.
+    // Whole percentages, never a fraction: the document's used percentages are
+    // then exactly the numbers each reading scripts, so they can be asserted.
     amount: { used: usedPercent, limit: 100, unit: "percent" },
   });
   const limits: CodexLimit[] = [];
@@ -125,9 +142,27 @@ function estimateArchiveDirectory(): string {
 /** Parse the document exactly as a reader does, and check its shape. */
 function readEstimateDocument(): EstimateDocument {
   const document = JSON.parse(fs.readFileSync(estimateDocumentPath(), "utf-8")) as EstimateDocument;
-  expect(Object.keys(document)).toEqual(["base", "ratio"]);
-  expect(Object.keys(document.base).sort()).toEqual(["at", "r5", "r7", "u5", "u7"]);
+  expect(Object.keys(document)).toEqual(["baseline", "ratio"]);
+  expect(Object.keys(document.baseline).sort()).toEqual(["capturedAt", "fiveHour", "weekly"]);
+  expect(Object.keys(document.baseline.fiveHour).sort()).toEqual(["resetsAt", "usedPercent"]);
+  expect(Object.keys(document.baseline.weekly).sort()).toEqual(["resetsAt", "usedPercent"]);
   return document;
+}
+
+/** The stored measurement decoded back into the estimator's epoch-ms terms. */
+function readInternal(): InternalEstimate {
+  const document = readEstimateDocument();
+  const { fiveHour, weekly, capturedAt } = document.baseline;
+  return {
+    base: {
+      u5: fiveHour.usedPercent,
+      u7: weekly.usedPercent,
+      r5: fiveHour.resetsAt === null ? null : Date.parse(fiveHour.resetsAt),
+      r7: weekly.resetsAt === null ? null : Date.parse(weekly.resetsAt),
+      at: Date.parse(capturedAt),
+    },
+    ratio: document.ratio,
+  };
 }
 
 interface Clock {
@@ -184,23 +219,29 @@ describe("model-cost Codex estimate document concurrency", () => {
       report({ fiveHour: 50, weekly: 5, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await instanceA.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({ base: { ...baseline, at: T0 }, ratio: 10 });
+      expect(readInternal()).toEqual({ base: { ...baseline, at: T0 }, ratio: 10 });
 
-      // B anchors inside the same windows; anchoring alone writes nothing.
+      // B anchors inside the same windows; its baseline publication keeps the
+      // peer's ratio instead of dropping it to null.
       clock.now = T0 + 90 * 1000;
       report({ fiveHour: 10, weekly: 1, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await instanceB.start();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({ base: { ...baseline, at: T0 }, ratio: 10 });
+      expect(readInternal()).toEqual({
+        base: { u5: 10, u7: 1, r5: R5, r7: R7, at: T0 + 90 * 1000 },
+        ratio: 10,
+      });
 
-      // B's qualifying sample carries a newer baseline, so it lands: 50 / 10 = 5.0.
+      // B's qualifying sample — 50 / 10 = 5.0 — is withheld by the throttle
+      // armed by its own baseline publication.
       clock.now = T0 + 120 * 1000;
       report({ fiveHour: 60, weekly: 11, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await instanceB.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({
+      expect(instanceB.line()).toContain("ratio≈5.0");
+      expect(readInternal()).toEqual({
         base: { u5: 10, u7: 1, r5: R5, r7: R7, at: T0 + 90 * 1000 },
-        ratio: 5,
+        ratio: 10,
       });
 
       // A's five-hour window rolls over: a baseline change, written at once.
@@ -209,7 +250,7 @@ describe("model-cost Codex estimate document concurrency", () => {
       report({ fiveHour: 4, weekly: 1, fiveHourResetsAt: rolledR5, weeklyResetsAt: R7 });
       await instanceA.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({
+      expect(readInternal()).toEqual({
         base: { u5: 4, u7: 1, r5: rolledR5, r7: R7, at: T0 + 150 * 1000 },
         ratio: 10,
       });
@@ -219,7 +260,7 @@ describe("model-cost Codex estimate document concurrency", () => {
       report({ fiveHour: 3, weekly: 0.5, fiveHourResetsAt: rolledR5, weeklyResetsAt: R7 });
       await instanceB.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({
+      expect(readInternal()).toEqual({
         base: { u5: 3, u7: 0.5, r5: rolledR5, r7: R7, at: T0 + 180 * 1000 },
         ratio: 5,
       });
@@ -228,7 +269,7 @@ describe("model-cost Codex estimate document concurrency", () => {
       report({ fiveHour: 58, weekly: 6, fiveHourResetsAt: rolledR5, weeklyResetsAt: R7 });
       await instanceB.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({
+      expect(readInternal()).toEqual({
         base: { u5: 3, u7: 0.5, r5: rolledR5, r7: R7, at: T0 + 180 * 1000 },
         ratio: 10,
       });
@@ -256,7 +297,7 @@ describe("model-cost Codex estimate document concurrency", () => {
       report({ fiveHour: 50, weekly: 5, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await instanceA.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({ base: { ...baseline, at: T0 + 60 * 1000 }, ratio: 10 });
+      expect(readInternal()).toEqual({ base: { ...baseline, at: T0 + 60 * 1000 }, ratio: 10 });
 
       // B's own sample reads 50 / 2 = 25.0, but its baseline is the older one:
       // the document keeps A's state and B adopts it instead.
@@ -264,7 +305,7 @@ describe("model-cost Codex estimate document concurrency", () => {
       report({ fiveHour: 80, weekly: 3, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await instanceB.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({ base: { ...baseline, at: T0 + 60 * 1000 }, ratio: 10 });
+      expect(readInternal()).toEqual({ base: { ...baseline, at: T0 + 60 * 1000 }, ratio: 10 });
       expect(instanceB.line()).toContain("ratio≈10.0");
 
       // B keeps sampling from the adopted baseline: 55 / 6 spans A's anchor,
@@ -273,7 +314,7 @@ describe("model-cost Codex estimate document concurrency", () => {
       report({ fiveHour: 55, weekly: 6, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await instanceB.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({ base: { ...baseline, at: T0 + 60 * 1000 }, ratio: 55 / 6 });
+      expect(readInternal()).toEqual({ base: { ...baseline, at: T0 + 60 * 1000 }, ratio: 9.1667 });
       expect(instanceB.line()).toContain("ratio≈9.2");
     });
   });
@@ -293,13 +334,13 @@ describe("model-cost Codex estimate document concurrency", () => {
       report({ fiveHour: 80, weekly: 3, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await instanceA.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({ base: { u5: 30, u7: 1, r5: R5, r7: R7, at: T0 }, ratio: 25 });
+      expect(readInternal()).toEqual({ base: { u5: 30, u7: 1, r5: R5, r7: R7, at: T0 }, ratio: 25 });
 
       clock.now = T0 + 120 * 1000;
       report({ fiveHour: 50, weekly: 5, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await instanceB.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({ base: { ...baseline, at: T0 }, ratio: 10 });
+      expect(readInternal()).toEqual({ base: { ...baseline, at: T0 }, ratio: 10 });
     });
   });
 
@@ -313,7 +354,7 @@ describe("model-cost Codex estimate document concurrency", () => {
       report({ fiveHour: 50, weekly: 5, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await instanceA.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({ base: { ...baseline, at: T0 }, ratio: 10 });
+      expect(readInternal()).toEqual({ base: { ...baseline, at: T0 }, ratio: 10 });
 
       // B mounts inside the same windows and reads the peer's measurement
       // instead of starting a fresh one.
@@ -323,14 +364,14 @@ describe("model-cost Codex estimate document concurrency", () => {
       await instanceB.start();
       await flushPromises();
       expect(instanceB.line()).toContain("ratio≈10.0");
-      expect(readEstimateDocument()).toEqual({ base: { ...baseline, at: T0 }, ratio: 10 });
+      expect(readInternal()).toEqual({ base: { ...baseline, at: T0 }, ratio: 10 });
 
       // Its next sample spans the adopted anchor: 55 / 6, not 45 / 5.
       clock.now = T0 + 180 * 1000;
       report({ fiveHour: 55, weekly: 6, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await instanceB.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({ base: { ...baseline, at: T0 }, ratio: 55 / 6 });
+      expect(readInternal()).toEqual({ base: { ...baseline, at: T0 }, ratio: 9.1667 });
       expect(instanceB.line()).toContain("ratio≈9.2");
     });
   });

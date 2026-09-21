@@ -535,10 +535,16 @@ describe("model-cost feature verification: redraw-only sweep", () => {
           timers: [{ id: 1, at: T0 + 2 * HOUR_MS + 1 }],
         });
 
-        // A first run has no writable document yet, and the sweep is not
-        // vacuous: the appended text is on the line it redraws.
+        // The first reading already published its baseline with no ratio yet,
+        // and the sweep is not vacuous: the appended text is on the line it
+        // redraws.
         const documentBefore = archiveSnapshot();
-        expect(documentBefore).toEqual({});
+        expect(Object.keys(documentBefore)).toEqual(["codex-usage-estimate.json"]);
+        const baselineDocument = JSON.parse(fs.readFileSync(
+          path.join(process.env.HOME!, ".omp", "cost-archive", "codex-usage-estimate.json"),
+          "utf-8",
+        )) as { ratio: unknown };
+        expect(baselineDocument.ratio).toBeNull();
         const beforeSweep = renderLastWidget(session.widgetContents, 300);
         expect(lineStartingWith(beforeSweep, "7d ")).toContain("estimating…");
         await flushPromises();
@@ -555,8 +561,8 @@ describe("model-cost feature verification: redraw-only sweep", () => {
           lines: beforeSweep,
         });
 
-        // One qualifying turn — a new observation, not a redraw — is what
-        // publishes the document.
+        // One qualifying turn — a new observation, not a redraw — refines the
+        // ratio in memory; the baseline document was already published.
         session.usage.reading = { fiveHour: 60, weekly: 7, fiveHourResetsAt: R5, weeklyResetsAt: R7 };
         await session.turn();
         await flushPromises();

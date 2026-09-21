@@ -34,3 +34,8 @@ After a restart the loaded baseline and stored estimate continue the measurement
 - [ ] Two instances over one archive home interleaving baseline and ratio writes never leave a document a reader cannot parse, and no temporary file is ever the visible document.
 - [ ] An instance whose baseline capture time is older cannot overwrite a document carrying a newer baseline; with equal capture times the writing instance's state is what the document holds.
 - [ ] An instance that finds a baseline written by another instance within the same windows adopts it and continues sampling from it rather than starting a fresh measurement.
+
+## Comments
+
+- 2026-09-21: Persisted shape revised after this ticket closed. The six-number document became a human-readable `baseline`/`ratio` shape with named windows, local-offset ISO-8601 timestamps and four-decimal numbers; the previous shape reinitializes as a first run instead of migrating. See `spec.md` §Implementation Decisions and `contract.md` P9.
+- 2026-09-21: The first usable paired reading now publishes the baseline with `ratio: null` (superseding this ticket's "no writable document before an estimate" rule), so restarts resume the same measurement, and a known ratio is never downgraded to null. See P10/P11 and the ADR consequence.

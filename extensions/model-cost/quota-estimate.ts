@@ -54,6 +54,14 @@ export interface QuotaEstimateState {
 /** A baseline is never trusted past the five-hour window it anchors. */
 const BASELINE_MAX_AGE_MS = FIVE_HOUR_MS;
 /**
+ * A local capture time this far ahead of the local clock is impossible: the
+ * archive is local, so every writer and reader shares the system clock, and
+ * such a timestamp means the clock moved backwards after the write (or the
+ * document came from a foreign clock). A baseline anchored in the future never
+ * ages out, so it is rejected as state instead of blocking measurement forever.
+ */
+export const BASELINE_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+/**
  * A real rollover moves a reported reset timestamp by hours or days; this
  * tolerance absorbs second-level rounding in relative reset fields.
  */
@@ -114,7 +122,10 @@ export function observeQuotaReading(
   return { baseline, estimate: deltaFiveHour / deltaWeekly };
 }
 
-/** A rollover of either window invalidates the baseline; no sample spans it. */
+/**
+ * A rollover of either window — or an aged-out or future-dated baseline —
+ * invalidates the baseline; no sample spans it.
+ */
 function isRollover(
   baseline: BaselinePair,
   reading: ChatGPTUsageSnapshot,
@@ -123,6 +134,7 @@ function isRollover(
   now: number,
 ): boolean {
   if (now - baseline.at >= BASELINE_MAX_AGE_MS) return true;
+  if (baseline.at - now > BASELINE_FUTURE_TOLERANCE_MS) return true;
   return (
     windowRolledOver(baseline.r5, resetTimestamp(reading.fiveHour.resetsAt), baseline.u5, fiveHour) ||
     windowRolledOver(baseline.r7, resetTimestamp(reading.weekly.resetsAt), baseline.u7, weekly)

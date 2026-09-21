@@ -2,7 +2,7 @@
  * Estimate state document — the persisted Codex quota-ratio measurement,
  * observed at both surfaces: the mounted extension (the rendered 7d line says
  * what it believes) and the document's own bytes under a substituted archive
- * home. Covers the six-number round trip, first-run behaviour, cold start,
+ * home. Covers the readable-document round trip, first-run behaviour, cold start,
  * write cadence, retry after a failed write, restart continuity, the never-
  * expiring stored estimate, and `/budget clear`.
  */
@@ -90,8 +90,8 @@ function usageReport(windows: PairedWindows) {
     id,
     scope: { accountId: "acct-1", windowId },
     window: { id: windowId, durationMs, ...(resetsAt === null ? {} : { resetsAt }) },
-    // Whole percentages, never a fraction: the document's six numbers are then
-    // exactly the percentages each reading scripts, so they can be asserted.
+    // Whole percentages, never a fraction: the document's used percentages are
+    // then exactly the numbers each reading scripts, so they can be asserted.
     amount: { used: usedPercent, limit: 100, unit: "percent" },
   });
   const limits: CodexLimit[] = [];
@@ -106,9 +106,26 @@ function usageReport(windows: PairedWindows) {
 
 // ── The document under test ──
 
+/** One window as the readable document carries it. */
+interface DocumentWindow {
+  usedPercent: number;
+  resetsAt: string | null;
+}
+
+/** The written shape: a readable baseline pair, then the stored estimate. */
 interface EstimateDocument {
-  base: { u5: number; u7: number; r5: number | null; r7: number | null; at: number };
+  baseline: {
+    capturedAt: string;
+    fiveHour: DocumentWindow;
+    weekly: DocumentWindow;
+  };
   ratio: number;
+}
+
+/** The same measurement in the estimator's internal epoch-ms terms. */
+interface InternalEstimate {
+  base: { u5: number; u7: number; r5: number | null; r7: number | null; at: number };
+  ratio: number | null;
 }
 
 function estimateDocumentPath(): string {
@@ -126,6 +143,40 @@ function readEstimateDocument(): EstimateDocument {
 
 function writeEstimateDocument(document: EstimateDocument): void {
   fs.writeFileSync(estimateDocumentPath(), JSON.stringify(document, null, 2), "utf-8");
+}
+
+/** Decode a written document back into the internal measurement terms. */
+function toInternal(document: EstimateDocument): InternalEstimate {
+  const { fiveHour, weekly, capturedAt } = document.baseline;
+  return {
+    base: {
+      u5: fiveHour.usedPercent,
+      u7: weekly.usedPercent,
+      r5: fiveHour.resetsAt === null ? null : Date.parse(fiveHour.resetsAt),
+      r7: weekly.resetsAt === null ? null : Date.parse(weekly.resetsAt),
+      at: Date.parse(capturedAt),
+    },
+    ratio: document.ratio,
+  };
+}
+
+/** Build a written document from a fixture; UTC `Z` keeps it machine-fixed. */
+function toDocument(state: InternalEstimate): EstimateDocument {
+  const { r5, r7 } = state.base;
+  return {
+    baseline: {
+      capturedAt: new Date(state.base.at).toISOString(),
+      fiveHour: {
+        usedPercent: state.base.u5,
+        resetsAt: r5 === null ? null : new Date(r5).toISOString(),
+      },
+      weekly: {
+        usedPercent: state.base.u7,
+        resetsAt: r7 === null ? null : new Date(r7).toISOString(),
+      },
+    },
+    ratio: state.ratio,
+  };
 }
 
 interface Clock {
@@ -182,7 +233,7 @@ function mountCodexSession(): CodexSession {
 }
 
 describe("model-cost Codex estimate document", () => {
-  test("a published document round-trips exactly six numbers, and a restart reads them", async () => {
+  test("a published document round-trips as readable fields, and a restart reads them", async () => {
     await withClock(T0, async clock => {
       const session = mountCodexSession();
       session.report({ fiveHour: 0, weekly: 0, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
@@ -194,12 +245,18 @@ describe("model-cost Codex estimate document", () => {
       await flushPromises();
 
       const document = readEstimateDocument();
-      expect(document).toEqual({
+      expect(toInternal(document)).toEqual({
         base: { u5: 0, u7: 0, r5: R5, r7: R7, at: T0 },
         ratio: 10,
       });
-      expect(Object.keys(document)).toEqual(["base", "ratio"]);
-      expect(Object.keys(document.base).sort()).toEqual(["at", "r5", "r7", "u5", "u7"]);
+      expect(Object.keys(document)).toEqual(["baseline", "ratio"]);
+      expect(Object.keys(document.baseline).sort()).toEqual(["capturedAt", "fiveHour", "weekly"]);
+      expect(Object.keys(document.baseline.fiveHour).sort()).toEqual(["resetsAt", "usedPercent"]);
+      expect(Object.keys(document.baseline.weekly).sort()).toEqual(["resetsAt", "usedPercent"]);
+      expect(document.baseline.capturedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}(?:Z|[+-]\d{2}:\d{2})$/);
+      expect(Date.parse(document.baseline.capturedAt)).toBe(T0);
+      expect(Date.parse(document.baseline.fiveHour.resetsAt!)).toBe(R5);
+      expect(Date.parse(document.baseline.weekly.resetsAt!)).toBe(R7);
 
       // A fresh instance continues the measurement: repeating the stored
       // baseline shows the stored estimate, so nothing was relearned.
@@ -212,18 +269,23 @@ describe("model-cost Codex estimate document", () => {
     });
   });
 
-  test("a cold start keeps its baseline in memory and publishes nothing before a sample qualifies", async () => {
+  test("the first reading publishes the baseline, and a restart keeps measuring from it", async () => {
     await withClock(T0, async clock => {
       const session = mountCodexSession();
       session.report({ fiveHour: 10, weekly: 2, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await session.start();
       await flushPromises();
 
+      // The baseline is published before any ratio exists, so the line shows
+      // estimating… while the measurement is already on disk.
       expect(session.line()).toContain("estimating…");
-      expect(fs.existsSync(estimateDocumentPath())).toBe(false);
+      expect(toInternal(readEstimateDocument())).toEqual({
+        base: { u5: 10, u7: 2, r5: R5, r7: R7, at: T0 },
+        ratio: null,
+      });
 
-      // Restarting before a sample qualifies loses the in-memory baseline, so
-      // the next paired reading re-anchors the measurement.
+      // A restart inside the same five-hour window continues from the persisted
+      // baseline instead of re-anchoring on the next reading.
       clock.now = T0 + 5 * 60 * 1000;
       const restarted = mountCodexSession();
       restarted.report({ fiveHour: 40, weekly: 4, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
@@ -231,17 +293,48 @@ describe("model-cost Codex estimate document", () => {
       await flushPromises();
 
       expect(restarted.line()).toContain("estimating…");
-      expect(fs.existsSync(estimateDocumentPath())).toBe(false);
+      expect(toInternal(readEstimateDocument())).toEqual({
+        base: { u5: 10, u7: 2, r5: R5, r7: R7, at: T0 },
+        ratio: null,
+      });
 
-      // The first qualifying sample spans 40 → 90 five-hour points, not the
-      // pre-restart 10 → 90, and publishes the baseline with the estimate.
+      // The qualifying sample spans the original 10 → 90 five-hour points, not
+      // the post-restart 40 → 90, and fills in the ratio beside the kept
+      // baseline.
       restarted.report({ fiveHour: 90, weekly: 6, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await restarted.turn();
       await flushPromises();
 
-      expect(readEstimateDocument()).toEqual({
-        base: { u5: 40, u7: 4, r5: R5, r7: R7, at: T0 + 5 * 60 * 1000 },
-        ratio: 25,
+      expect(restarted.line()).toContain("ratio≈20.0");
+      expect(toInternal(readEstimateDocument())).toEqual({
+        base: { u5: 10, u7: 2, r5: R5, r7: R7, at: T0 },
+        ratio: 20,
+      });
+    });
+  });
+
+  test("a five-hour rollover publishes the new baseline even before any ratio exists", async () => {
+    await withClock(T0, async clock => {
+      const session = mountCodexSession();
+      session.report({ fiveHour: 10, weekly: 2, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
+      await session.start();
+      await flushPromises();
+      expect(toInternal(readEstimateDocument())).toEqual({
+        base: { u5: 10, u7: 2, r5: R5, r7: R7, at: T0 },
+        ratio: null,
+      });
+
+      // The five-hour window rolls over: the new baseline lands immediately
+      // with the ratio still unknown.
+      clock.now = T0 + 4 * HOUR_MS;
+      const rolledR5 = R5 + FIVE_HOUR_MS;
+      session.report({ fiveHour: 3, weekly: 4, fiveHourResetsAt: rolledR5, weeklyResetsAt: R7 });
+      await session.turn();
+      await flushPromises();
+
+      expect(toInternal(readEstimateDocument())).toEqual({
+        base: { u5: 3, u7: 4, r5: rolledR5, r7: R7, at: T0 + 4 * HOUR_MS },
+        ratio: null,
       });
     });
   });
@@ -258,10 +351,10 @@ describe("model-cost Codex estimate document", () => {
 
       // Stand a sentinel document in the same shape: any writer that fires
       // would replace it.
-      const sentinel: EstimateDocument = {
+      const sentinel = toDocument({
         base: { u5: 7, u7: 7, r5: R5, r7: R7, at: T0 - 90_000 },
         ratio: 3.5,
-      };
+      });
       writeEstimateDocument(sentinel);
 
       // One point below the five-hour span threshold: a skipped sample.
@@ -288,13 +381,15 @@ describe("model-cost Codex estimate document", () => {
       session.report({ fiveHour: 0, weekly: 0, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await session.start();
 
-      // The first qualifying sample — 50 / 5 — publishes baseline and estimate.
+      // The first qualifying sample — 50 / 5 — computes the ratio in memory,
+      // but its write waits out the throttle armed by the baseline publication.
       session.report({ fiveHour: 50, weekly: 5, fiveHourResetsAt: R5, weeklyResetsAt: R7 });
       await session.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({
+      expect(session.line()).toContain("ratio≈10.0");
+      expect(toInternal(readEstimateDocument())).toEqual({
         base: { u5: 0, u7: 0, r5: R5, r7: R7, at: T0 },
-        ratio: 10,
+        ratio: null,
       });
 
       // A rollover moves the reported five-hour reset: a new baseline lands
@@ -304,7 +399,7 @@ describe("model-cost Codex estimate document", () => {
       session.report({ fiveHour: 5, weekly: 1, fiveHourResetsAt: rolledR5, weeklyResetsAt: R7 });
       await session.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({
+      expect(toInternal(readEstimateDocument())).toEqual({
         base: { u5: 5, u7: 1, r5: rolledR5, r7: R7, at: T0 + 30 * 1000 },
         ratio: 10,
       });
@@ -315,7 +410,7 @@ describe("model-cost Codex estimate document", () => {
       session.report({ fiveHour: 60, weekly: 7, fiveHourResetsAt: rolledR5, weeklyResetsAt: R7 });
       await session.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({
+      expect(toInternal(readEstimateDocument())).toEqual({
         base: { u5: 5, u7: 1, r5: rolledR5, r7: R7, at: T0 + 30 * 1000 },
         ratio: 10,
       });
@@ -326,7 +421,7 @@ describe("model-cost Codex estimate document", () => {
       session.report({ fiveHour: 65, weekly: 9, fiveHourResetsAt: rolledR5, weeklyResetsAt: R7 });
       await session.turn();
       await flushPromises();
-      expect(readEstimateDocument()).toEqual({
+      expect(toInternal(readEstimateDocument())).toEqual({
         base: { u5: 5, u7: 1, r5: rolledR5, r7: R7, at: T0 + 30 * 1000 },
         ratio: 7.5,
       });
@@ -368,9 +463,9 @@ describe("model-cost Codex estimate document", () => {
       await session.turn();
       await flushPromises();
 
-      expect(readEstimateDocument()).toEqual({
+      expect(toInternal(readEstimateDocument())).toEqual({
         base: { u5: 5, u7: 1, r5: rolledR5, r7: R7, at: T0 + 90 * 1000 },
-        ratio: 55 / 6,
+        ratio: 9.1667,
       });
     });
   });
@@ -453,17 +548,22 @@ describe("model-cost Codex estimate document", () => {
 
 describe("model-cost Codex estimate document first runs", () => {
   const baseline = { u5: 10, u7: 2, r5: R5, r7: R7, at: T0 };
+  const baselineDocument = toDocument({ base: baseline, ratio: 6.7 }).baseline;
 
   const invalidDocuments: Array<[string, string | null]> = [
     ["an absent document", null],
-    ["an unparseable document", '{"base": {"u5": 10,'],
-    ["a document with no estimate", JSON.stringify({ base: baseline })],
-    ["a document whose baseline is not an object", JSON.stringify({ base: 7, ratio: 6.7 })],
-    ["a document whose estimate is not a number", JSON.stringify({ base: baseline, ratio: "6.7" })],
-    ["a used percent above 100", JSON.stringify({ base: { ...baseline, u5: 101 }, ratio: 6.7 })],
-    ["a negative used percent", JSON.stringify({ base: { ...baseline, u7: -1 }, ratio: 6.7 })],
-    ["a zero estimate", JSON.stringify({ base: baseline, ratio: 0 })],
-    ["a negative estimate", JSON.stringify({ base: baseline, ratio: -6.7 })],
+    ["an unparseable document", '{"baseline": {"fiveHour":'],
+    ["a document with no estimate", JSON.stringify({ baseline: baselineDocument })],
+    ["a document whose baseline is not an object", JSON.stringify({ baseline: 7, ratio: 6.7 })],
+    ["a document whose estimate is not a number", JSON.stringify({ baseline: baselineDocument, ratio: "6.7" })],
+    ["a used percent above 100", JSON.stringify({ baseline: { ...baselineDocument, fiveHour: { ...baselineDocument.fiveHour, usedPercent: 101 } }, ratio: 6.7 })],
+    ["a negative used percent", JSON.stringify({ baseline: { ...baselineDocument, weekly: { ...baselineDocument.weekly, usedPercent: -1 } }, ratio: 6.7 })],
+    ["a malformed capture time", JSON.stringify({ baseline: { ...baselineDocument, capturedAt: "yesterday" }, ratio: 6.7 })],
+    ["a malformed reset time", JSON.stringify({ baseline: { ...baselineDocument, fiveHour: { ...baselineDocument.fiveHour, resetsAt: "tomorrow" } }, ratio: 6.7 })],
+    ["a zero estimate", JSON.stringify({ baseline: baselineDocument, ratio: 0 })],
+    ["a negative estimate", JSON.stringify({ baseline: baselineDocument, ratio: -6.7 })],
+    ["a baseline captured in the future", JSON.stringify({ baseline: { ...baselineDocument, capturedAt: new Date(T0 + DAY_MS).toISOString() }, ratio: 6.7 })],
+    ["the previous six-number document", JSON.stringify({ base: baseline, ratio: 6.7 })],
   ];
 
   for (const [description, contents] of invalidDocuments) {
@@ -487,7 +587,7 @@ describe("model-cost Codex estimate document first runs", () => {
         await session.turn();
         await flushPromises();
 
-        expect(readEstimateDocument()).toEqual({ base: baseline, ratio: 10 });
+        expect(toInternal(readEstimateDocument())).toEqual({ base: baseline, ratio: 10 });
       });
     });
   }

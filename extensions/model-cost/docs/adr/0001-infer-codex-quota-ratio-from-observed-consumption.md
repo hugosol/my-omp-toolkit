@@ -10,5 +10,8 @@ Codex reports each window only as a used percentage and never exposes absolute q
 
 ## Consequences
 
-- Requires persisted state (baseline pair plus last qualifying ratio) and a cold-start `estimating…` state until a first qualifying sample exists.
+- Requires persisted state (baseline pair plus the last qualifying ratio, if any) and a cold-start `estimating…` state until a first qualifying sample exists.
+- The baseline is published as soon as the first usable paired reading arrives, with `ratio: null` until a sample qualifies, so a restart resumes the same measurement instead of re-anchoring; a known ratio is never downgraded to null by a later publication or an adopted peer baseline.
 - Relearning every five-hour window means plan and policy changes surface within one window.
+- A document whose baseline capture time is ahead of the local clock reads as a first run: an impossible timestamp is never treated as "newer", so a backwards clock step (or a foreign/fabricated document) cannot block publication forever.
+- The document is stored human-readably — named baseline windows, local-time ISO-8601 timestamps with their UTC offset, four-decimal numbers — so a stale estimate can be diagnosed by reading the file directly. A shape change reinitializes the document instead of carrying a migration path.
