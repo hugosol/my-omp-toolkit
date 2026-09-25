@@ -24,7 +24,13 @@ export interface ScheduledTimer {
   fn: () => void | Promise<void>;
 }
 
-export function mountExtension() {
+/** Fake host controls injected into the mounted extension. */
+export interface MountExtensionOptions {
+  /** Session thinking level reported by `pi.getThinkingLevel()`; defaults to `"high"`. */
+  getThinkingLevel?: () => unknown;
+}
+
+export function mountExtension(options: MountExtensionOptions = {}) {
   const handlers = new Map<string, EventHandler>();
   const commands = new Map<string, CommandHandler>();
   const api = {
@@ -35,6 +41,7 @@ export function mountExtension() {
     on(event: string, handler: EventHandler) {
       handlers.set(event, handler);
     },
+    getThinkingLevel: options.getThinkingLevel ?? (() => "high"),
   };
   modelCost(api as Parameters<typeof modelCost>[0]);
   return { commands, handlers };

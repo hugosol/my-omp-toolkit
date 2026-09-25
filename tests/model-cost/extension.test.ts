@@ -34,7 +34,7 @@ describe("model-cost extension", () => {
 
     fire(handlers, "agent_start", ctx);
 
-    expect(widgetCalls[widgetCalls.length - 1]?.[0]).toContain("(136.0K/272.0K)");
+    expect(widgetCalls[widgetCalls.length - 1]?.[0]).toContain("(136.0K/272.0K)]  Effort: high");
   });
 
   test("DeepSeek mode renders a default 450K context budget", async () => {
@@ -47,7 +47,7 @@ describe("model-cost extension", () => {
 
       fire(handlers, "agent_start", ctx);
 
-      expect(widgetCalls[widgetCalls.length - 1]?.[0]).toContain("(225.0K/450.0K)");
+      expect(widgetCalls[widgetCalls.length - 1]?.[0]).toContain("(225.0K/450.0K)]  Effort: high");
     });
   });
 
@@ -61,7 +61,7 @@ describe("model-cost extension", () => {
 
       fire(handlers, "agent_start", ctx);
 
-      expect(widgetCalls[widgetCalls.length - 1]?.[0]).toContain("(225.0K/450.0K)");
+      expect(widgetCalls[widgetCalls.length - 1]?.[0]).toContain("(225.0K/450.0K)]  Effort: high");
     });
   });
 
@@ -520,7 +520,7 @@ describe("model-cost token-only mode", () => {
       fire(handlers, "agent_start", ctx);
 
       const lines = widgetCalls[widgetCalls.length - 1] ?? [];
-      expect(lines[0]).toContain("(225.0K/450.0K)");
+      expect(lines[0]).toContain("(225.0K/450.0K)]  Effort: high");
       expect(lines.some(line => line.includes("Total:"))).toBe(true);
       const text = lines.join("\n");
       expect(text).not.toContain("¥");
@@ -541,6 +541,20 @@ describe("model-cost token-only mode", () => {
     fire(handlers, "agent_start", ctx);
 
     expect(widgetCalls[widgetCalls.length - 1]).toBeUndefined();
+  });
+
+  test("renders Effort: ? when the host has no thinking level", async () => {
+    for (const getThinkingLevel of [() => undefined, () => { throw new Error("no host"); }]) {
+      const { handlers } = mountExtension({ getThinkingLevel });
+      const { ctx, widgetCalls } = extensionContext(
+        225_000,
+        { id: "deepseek-v4-flash", provider: "opencode-go" },
+      );
+
+      await fire(handlers, "agent_start", ctx);
+
+      expect(widgetCalls[widgetCalls.length - 1]?.[0]).toContain(")]  Effort: ?");
+    }
   });
 });
 

@@ -142,11 +142,29 @@ function colorBar(bar: string, tokens: number, max: number, theme: { fg: (color:
   return theme.fg(barColor(pct), bar);
 }
 
+/**
+ * The session's effective thinking effort, as reported by the host. This is the
+ * resolved level the session is actually using (auto already classified,
+ * clamped to the active model), so it stays consistent with the current
+ * session even after a temporary model switch. The host repaints on
+ * `model_changed` / `thinking_level_changed`, and the widget render callback
+ * runs per paint, so reading it here is always current.
+ */
+function readEffort(pi: ExtensionAPI): string {
+  try {
+    const level = pi.getThinkingLevel();
+    return level === undefined || level === "inherit" ? "?" : level;
+  } catch {
+    return "?";
+  }
+}
+
 function buildChatGPTWidgetLines(
   state: TrackerState,
   ctx: ExtensionContext,
   theme: { fg: (color: string, text: string) => string },
   width: number,
+  effortLabel: string,
 ): string[] {
   const stats = ctx.sessionManager.getUsageStatistics();
   const cu = ctx.getContextUsage();
@@ -156,7 +174,7 @@ function buildChatGPTWidgetLines(
 
   const lines: string[] = [];
   if (bar && state.lastContextTokens !== null) {
-    lines.push(colorBar(bar, state.lastContextTokens, budget, theme));
+    lines.push(`${colorBar(bar, state.lastContextTokens, budget, theme)}  ${effortLabel}`);
   }
 
   const now = Date.now();
@@ -226,6 +244,7 @@ function buildWidgetLines(
   ctx: ExtensionContext,
   theme: { fg: (color: string, text: string) => string },
   _width: number,
+  effortLabel: string,
 ): string[] {
   const mode = classifyModelMode(ctx.model);
   if (mode === "hidden") return [];
@@ -236,7 +255,7 @@ function buildWidgetLines(
   const now = new Date();
 
   if (mode === "codex") {
-    return buildChatGPTWidgetLines(state, ctx, theme, _width);
+    return buildChatGPTWidgetLines(state, ctx, theme, _width, effortLabel);
   }
 
   const budget = state.deepSeekBudget;
@@ -247,6 +266,7 @@ function buildWidgetLines(
     const parts: string[] = [];
     if (bar && state.lastContextTokens !== null) {
       parts.push(colorBar(bar, state.lastContextTokens, budget, theme));
+      parts.push(effortLabel);
     }
     if (parts.length > 0) lines.push(parts.join("  "));
 
@@ -282,6 +302,7 @@ function buildWidgetLines(
   const parts: string[] = [periodIcon];
   if (bar && state.lastContextTokens !== null) {
     parts.push(colorBar(bar, state.lastContextTokens, budget, theme));
+    parts.push(effortLabel);
   }
   if (state.balance !== null) {
     parts.push(`\u{1F4B0} Bal: \u00A5${state.balance.toFixed(2)}`);
@@ -328,7 +349,8 @@ function refresh(
 
   ctx.ui.setWidget(WIDGET_KEY, (_tui: unknown, theme: { fg: (color: string, text: string) => string }) => ({
     render(width: number) {
-      return buildWidgetLines(state, daily, ctx, theme, width);
+      const effortLabel = `${theme.fg("dim", "Effort:")} ${readEffort(pi)}`;
+      return buildWidgetLines(state, daily, ctx, theme, width, effortLabel);
     },
   }));
 }

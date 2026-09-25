@@ -11,8 +11,10 @@
  * before this feature landed (commit e48f81b; all feature work is uncommitted,
  * so `git show HEAD:extensions/model-cost/*` is the pre-feature source). The
  * bytes were captured by mounting that pre-feature extension in-process against
- * the same fake Codex provider, frozen clock and empty archive these tests use,
- * and were never rewritten from the current implementation. The frozen clock
+ * the same fake Codex provider, frozen clock and empty archive these tests use.
+ * A later always-on session-effort feature appends `Effort: <level>` behind the
+ * context bar, so the recorded context-line bytes carry that segment; the census
+ * still isolates this feature's delta to the 7d line. The frozen clock
  * maps local-time getters to UTC, so the recorded reset text holds on every
  * machine. Every mount runs under the shared harness's temporary archive home:
  * the extension loads the estimate document while mounting.
@@ -83,19 +85,19 @@ interface WidthCensus {
  * widths narrow enough that the pre-existing cut lands inside the core.
  */
 const CODEX_ROWS: WidthCensus[] = [
-  { width: 300, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · left≈9.3×5h · ratio≈10.0 · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 120, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · left≈9.3×5h · ratio≈10.0 · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 95, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · left≈9.3×5h · ratio≈10.0 · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 76, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d 7.0% / 57.1% · left≈9.3×5h · ratio≈10.0 · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 60, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d 7.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d 7.0% / 57.1% · left≈9.3×5h · ratio≈10.0 · resets in 3d 0h", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 42, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% / 60.0% · resets in 2h", "7d 7.0% / 57.1% · resets in 3d 0h", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% / 60.0% · resets in 2h", "7d 7.0% / 57.1% · left≈9.3×5h · ratio≈10.0", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 30, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% / 60.0%", "7d 7.0% / 57.1%", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% / 60.0%", "7d 7.0% / 57.1% · left≈9.3×5h…", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 24, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% / 60.0%", "7d 7.0% / 57.1%", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% / 60.0%", "7d 7.0% / 57.1% · left≈…", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 20, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% / 60.0%", "7d 7.0% / 57.1%", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% / 60.0%", "7d 7.0% / 57.1% · l…", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 15, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% / 60.…", "7d 7.0% / 57.1%", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% / 60.…", "7d 7.0% / 57.1…", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 10, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% …", "7d 7.0% /…", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 60.0% …", "7d 7.0% /…", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 5, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 6…", "7d 7…", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 6…", "7d 7…", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 3, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h…", "7d…", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h…", "7d…", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 300, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · left≈9.3×5h · ratio≈10.0 · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 120, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · left≈9.3×5h · ratio≈10.0 · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 95, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · left≈9.3×5h · ratio≈10.0 · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 76, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━──────────│──────── 7.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h ━━━━━━━━━━━━│─────── 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d 7.0% / 57.1% · left≈9.3×5h · ratio≈10.0 · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 60, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d 7.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% / 60.0% · resets in 2h (01/15 10:00)", "7d 7.0% / 57.1% · left≈9.3×5h · ratio≈10.0 · resets in 3d 0h", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 42, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% / 60.0% · resets in 2h", "7d 7.0% / 57.1% · resets in 3d 0h", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% / 60.0% · resets in 2h", "7d 7.0% / 57.1% · left≈9.3×5h · ratio≈10.0", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 30, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% / 60.0%", "7d 7.0% / 57.1%", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% / 60.0%", "7d 7.0% / 57.1% · left≈9.3×5h…", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 24, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% / 60.0%", "7d 7.0% / 57.1%", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% / 60.0%", "7d 7.0% / 57.1% · left≈…", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 20, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% / 60.0%", "7d 7.0% / 57.1%", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% / 60.0%", "7d 7.0% / 57.1% · l…", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 15, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% / 60.…", "7d 7.0% / 57.1%", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% / 60.…", "7d 7.0% / 57.1…", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 10, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% …", "7d 7.0% /…", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 60.0% …", "7d 7.0% /…", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 5, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 6…", "7d 7…", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 6…", "7d 7…", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 3, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h…", "7d…", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h…", "7d…", "📋 Total:  Cache:   0%  Sum:       0"] },
 ];
 
 /**
@@ -103,17 +105,17 @@ const CODEX_ROWS: WidthCensus[] = [
  * where the appended text reads `estimating…`.
  */
 const ESTIMATING_ROWS: WidthCensus[] = [
-  { width: 300, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h ━━──────────│─────── 12.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━━━━━━━────│──────── 34.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h ━━──────────│─────── 12.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━━━━━━━────│──────── 34.0% / 57.1% · estimating… · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 76, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h ━━──────────│─────── 12.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━━━━━━━────│──────── 34.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h ━━──────────│─────── 12.0% / 60.0% · resets in 2h (01/15 10:00)", "7d 34.0% / 57.1% · estimating… · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 60, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 12.0% / 60.0% · resets in 2h (01/15 10:00)", "7d 34.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 12.0% / 60.0% · resets in 2h (01/15 10:00)", "7d 34.0% / 57.1% · estimating… · resets in 3d 0h", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 42, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 12.0% / 60.0% · resets in 2h", "7d 34.0% / 57.1% · resets in 3d 0h", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 12.0% / 60.0% · resets in 2h", "7d 34.0% / 57.1% · estimating…", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 24, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 12.0% / 60.0%", "7d 34.0% / 57.1%", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 12.0% / 60.0%", "7d 34.0% / 57.1% · esti…", "📋 Total:  Cache:   0%  Sum:       0"] },
-  { width: 10, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 12.0% …", "7d 34.0% …", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]", "5h 12.0% …", "7d 34.0% …", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 300, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h ━━──────────│─────── 12.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━━━━━━━────│──────── 34.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h ━━──────────│─────── 12.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━━━━━━━────│──────── 34.0% / 57.1% · estimating… · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 76, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h ━━──────────│─────── 12.0% / 60.0% · resets in 2h (01/15 10:00)", "7d ━━━━━━━────│──────── 34.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h ━━──────────│─────── 12.0% / 60.0% · resets in 2h (01/15 10:00)", "7d 34.0% / 57.1% · estimating… · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 60, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 12.0% / 60.0% · resets in 2h (01/15 10:00)", "7d 34.0% / 57.1% · resets in 3d 0h (01/18 08:00)", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 12.0% / 60.0% · resets in 2h (01/15 10:00)", "7d 34.0% / 57.1% · estimating… · resets in 3d 0h", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 42, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 12.0% / 60.0% · resets in 2h", "7d 34.0% / 57.1% · resets in 3d 0h", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 12.0% / 60.0% · resets in 2h", "7d 34.0% / 57.1% · estimating…", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 24, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 12.0% / 60.0%", "7d 34.0% / 57.1%", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 12.0% / 60.0%", "7d 34.0% / 57.1% · esti…", "📋 Total:  Cache:   0%  Sum:       0"] },
+  { width: 10, before: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 12.0% …", "7d 34.0% …", "📋 Total:  Cache:   0%  Sum:       0"], after: ["[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high", "5h 12.0% …", "7d 34.0% …", "📋 Total:  Cache:   0%  Sum:       0"] },
 ];
 
 /** The pre-feature 7d widget at 300 columns, rendered with the theme's colour markup. */
 const COLOURED_BEFORE: string[] = [
-  "[success][██████████░░░░░░░░░░  50% (136.0K/272.0K)][/success]",
+  "[success][██████████░░░░░░░░░░  50% (136.0K/272.0K)][/success]  [dim]Effort:[/dim] high",
   "5h [text]━━━━━━━━━━━━[/text]│─────── [text]60.0[/text]% / 60.0% · resets in 2h (01/15 10:00)",
   "7d [text]━[/text]──────────│──────── [text]7.0[/text]% / 57.1% · resets in 3d 0h (01/18 08:00)",
   "📋 Total:  Cache:   0%  Sum:       0",
@@ -124,18 +126,18 @@ const MODE_RENDERS = [
   {
     mode: "DeepSeek mode",
     model: { id: "deepseek-v4-pro", provider: "deepseek" },
-    lines: ["🔥  [██████░░░░░░░░░░░░░░  30% (136.0K/450.0K)]  ⏳ Accrued: ¥0.0000", "📋 Total:  Cache:   0%  ￥Cache/In/Out：--:--:--  Sum:       0  Cost:    ¥0.0000"],
+    lines: ["🔥  [██████░░░░░░░░░░░░░░  30% (136.0K/450.0K)]  Effort: high  ⏳ Accrued: ¥0.0000", "📋 Total:  Cache:   0%  ￥Cache/In/Out：--:--:--  Sum:       0  Cost:    ¥0.0000"],
   },
   {
     mode: "token-only mode",
     model: { id: "deepseek-v4-flash", provider: "opencode-go" },
-    lines: ["[██████░░░░░░░░░░░░░░  30% (136.0K/450.0K)]", "📋 Total:  Cache:   0%  Sum:       0"],
+    lines: ["[██████░░░░░░░░░░░░░░  30% (136.0K/450.0K)]  Effort: high", "📋 Total:  Cache:   0%  Sum:       0"],
   },
 ];
 
 /** The loader-failure render, recorded at 300, 24 and 5 columns. */
 const INCOMPATIBLE_LINES: string[] = [
-  "[██████████░░░░░░░░░░  50% (136.0K/272.0K)]",
+  "[██████████░░░░░░░░░░  50% (136.0K/272.0K)]  Effort: high",
   "5h incompatible OMP version",
   "7d incompatible OMP version",
   "📋 Total:  Cache:   0%  Sum:       0",
