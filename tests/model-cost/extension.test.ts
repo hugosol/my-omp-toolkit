@@ -556,6 +556,32 @@ describe("model-cost token-only mode", () => {
       expect(widgetCalls[widgetCalls.length - 1]?.[0]).toContain(")]  Effort: ?");
     }
   });
+
+  test("colours only the level value with the theme's per-level colour", () => {
+    const styled: string[] = [];
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      getThinkingBorderColor: (level: string) => (text: string) => {
+        styled.push(`${level}:${text}`);
+        return `<${level}>${text}</${level}>`;
+      },
+    };
+
+    for (const level of ["high", "low"]) {
+      const { handlers } = mountExtension({ getThinkingLevel: () => level });
+      const { ctx, widgetContents } = extensionContext(
+        225_000,
+        { id: "deepseek-v4-flash", provider: "opencode-go" },
+      );
+
+      fire(handlers, "agent_start", ctx);
+      const first = renderLastWidget(widgetContents, 120, theme)[0] ?? "";
+      expect(first).toContain(`]  Effort: <${level}>${level}</${level}>`);
+      expect(first).not.toContain(`<${level}>Effort:`);
+    }
+
+    expect(styled).toEqual(["high:high", "low:low"]);
+  });
 });
 
 describe("model-cost provider-gated billing", () => {
@@ -1069,6 +1095,53 @@ describe("model-cost agent_end force refresh cache", () => {
       expect(codexCalls).toBe(2);
     } finally {
       Date.now = originalNow;
+    }
+  });
+});
+
+describe("model-cost balance colour", () => {
+  test("tints the balance amount yellow below 10 and red below 5", async () => {
+    const theme = {
+      fg: (color: string, text: string) => `[${color}]${text}[/${color}]`,
+      getThinkingBorderColor: (level: string) => (text: string) => `[thinking.${level}]${text}[/thinking.${level}]`,
+    };
+    const cases = [
+      { balance: "4.99", expected: "Bal: [error]¥4.99[/error]" },
+      { balance: "5.00", expected: "Bal: [warning]¥5.00[/warning]" },
+      { balance: "9.99", expected: "Bal: [warning]¥9.99[/warning]" },
+      { balance: "10.00", expected: "Bal: ¥10.00" },
+      { balance: "40.26", expected: "Bal: ¥40.26" },
+    ];
+    const originalFetch = globalThis.fetch;
+    try {
+      for (const { balance, expected } of cases) {
+        await withTemporaryHome(async () => {
+          globalThis.fetch = async () => new Response(JSON.stringify({
+            balance_infos: [{ currency: "CNY", total_balance: balance }],
+          }));
+          const { handlers } = mountExtension();
+          const { ctx, widgetContents } = extensionContext(
+            225_000,
+            { id: "deepseek-v4-pro", provider: "deepseek" },
+          );
+          ctx.modelRegistry = {
+            ...ctx.modelRegistry,
+            resolver: () => async () => "key",
+            getProviderBaseUrl: () => "https://api.deepseek.com",
+          };
+
+          await fire(handlers, "agent_start", ctx);
+
+          const first = renderLastWidget(widgetContents, 140, theme)[0] ?? "";
+          expect(first).toContain(expected);
+          if (balance === "10.00" || balance === "40.26") {
+            expect(first).not.toContain("[warning]");
+            expect(first).not.toContain("[error]");
+          }
+        });
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });

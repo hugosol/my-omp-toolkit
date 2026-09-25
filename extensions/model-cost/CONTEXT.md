@@ -103,5 +103,5 @@ The glyph leading the DeepSeek widget line that encodes the pricing period: `ðŸ”
 _Avoid_: emoji, status icon
 
 **Effort** (displayed as `Effort: high`):
-The thinking level the active session is actually using, as resolved and reported by the host (`auto` already classified, clamped to the current model), rendered in the widget directly behind the context progress bar. `Effort: ?` marks an unavailable level. This is the session's effective level, not the persisted configuration value.
+The thinking level the active session is actually using, as resolved and reported by the host (`auto` already classified, clamped to the current model), rendered in the widget directly behind the context progress bar. `Effort: ?` marks an unavailable level. The `Effort:` label stays at the terminal's default foreground (matching `Bal:` / `Accrued:`); only the level value is tinted with the theme's per-level thinking colour (`thinkingHigh`, â€¦), falling back to `thinkingOff` for `?`. This is the session's effective level, not the persisted configuration value.
 _Avoid_: thinking level (alone), reasoning strength

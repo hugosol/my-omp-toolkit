@@ -48,9 +48,13 @@ const R7 = T0 + 3 * DAY_MS;
 
 interface Theme {
   fg: (color: string, text: string) => string;
+  getThinkingBorderColor: (level: string) => (text: string) => string;
 }
 
-const COLOUR_THEME: Theme = { fg: (color, text) => `[${color}]${text}[/${color}]` };
+const COLOUR_THEME: Theme = {
+  fg: (color, text) => `[${color}]${text}[/${color}]`,
+  getThinkingBorderColor: level => text => `[thinking.${level}]${text}[/thinking.${level}]`,
+};
 
 afterEach(() => {
   __setOmpModuleLoaderForTest(null);
@@ -115,7 +119,7 @@ const ESTIMATING_ROWS: WidthCensus[] = [
 
 /** The pre-feature 7d widget at 300 columns, rendered with the theme's colour markup. */
 const COLOURED_BEFORE: string[] = [
-  "[success][██████████░░░░░░░░░░  50% (136.0K/272.0K)][/success]  [dim]Effort:[/dim] high",
+  "[success][██████████░░░░░░░░░░  50% (136.0K/272.0K)][/success]  Effort: [thinking.high]high[/thinking.high]",
   "5h [text]━━━━━━━━━━━━[/text]│─────── [text]60.0[/text]% / 60.0% · resets in 2h (01/15 10:00)",
   "7d [text]━[/text]──────────│──────── [text]7.0[/text]% / 57.1% · resets in 3d 0h (01/18 08:00)",
   "📋 Total:  Cache:   0%  Sum:       0",

@@ -99,7 +99,10 @@ export function codexContext(overrides: {
         if (typeof content === "function") {
           const component = (content as (tui: unknown, theme: { fg: (color: string, text: string) => string }) => { render(width: number): string[] })(
             {},
-            { fg: (_color: string, text: string) => text },
+            {
+              fg: (_color: string, text: string) => text,
+              getThinkingBorderColor: () => (text: string) => text,
+            },
           );
           widgetCalls.push(component.render(120));
         } else {
@@ -184,7 +187,10 @@ export function extensionContext(
         if (typeof content === "function") {
           const component = (content as (tui: unknown, theme: { fg: (color: string, text: string) => string }) => { render(width: number): string[] })(
             {},
-            { fg: (_color: string, text: string) => text },
+            {
+              fg: (_color: string, text: string) => text,
+              getThinkingBorderColor: () => (text: string) => text,
+            },
           );
           widgetCalls.push(component.render(120));
         } else {
@@ -239,14 +245,21 @@ export function runCommand(
 export function renderLastWidget(
   widgetContents: unknown[],
   width: number,
-  theme: { fg: (color: string, text: string) => string } = { fg: (_color, text) => text },
+  theme: {
+    fg: (color: string, text: string) => string;
+    getThinkingBorderColor?: (level: string) => (text: string) => string;
+  } = { fg: (_color, text) => text },
 ): string[] {
   const content = widgetContents[widgetContents.length - 1];
   if (typeof content !== "function") throw new Error("last widget content is not a component factory");
-  const factory = content as (tui: unknown, theme: { fg: (color: string, text: string) => string }) => {
+  const factory = content as (tui: unknown, theme: unknown) => {
     render(width: number): string[];
   };
-  return factory({}, theme).render(width);
+  const effectiveTheme = {
+    fg: theme.fg,
+    getThinkingBorderColor: theme.getThinkingBorderColor ?? (() => (text: string) => text),
+  };
+  return factory({}, effectiveTheme).render(width);
 }
 
 /** Run `run` with HOME/USERPROFILE pointing at a fresh temporary directory. */

@@ -73,6 +73,9 @@ const BALANCE_PROVIDER = "deepseek";
 const BAR_WIDTH = 20;
 const CHATGPT_BUDGET = 272_000;
 const MAX_DEEPSEEK_BUDGET = 1_000_000;
+/** Balance amounts at or below these yuan values are tinted (strictly below). */
+const BALANCE_WARNING_RMB = 10;
+const BALANCE_ERROR_RMB = 5;
 
 interface MessageUsage {
   input: number;
@@ -305,7 +308,13 @@ function buildWidgetLines(
     parts.push(effortLabel);
   }
   if (state.balance !== null) {
-    parts.push(`\u{1F4B0} Bal: \u00A5${state.balance.toFixed(2)}`);
+    const amount = `\u00A5${state.balance.toFixed(2)}`;
+    const tinted = state.balance < BALANCE_ERROR_RMB
+      ? theme.fg("error", amount)
+      : state.balance < BALANCE_WARNING_RMB
+        ? theme.fg("warning", amount)
+        : amount;
+    parts.push(`\u{1F4B0} Bal: ${tinted}`);
   }
   const accruedPart = segBar
     ? `\u23F3 Accrued: ${fmtCost(accruedCost)} ${segBar}`
@@ -347,9 +356,15 @@ function refresh(
     return;
   }
 
-  ctx.ui.setWidget(WIDGET_KEY, (_tui: unknown, theme: { fg: (color: string, text: string) => string }) => ({
+  ctx.ui.setWidget(WIDGET_KEY, (_tui: unknown, theme: {
+    fg: (color: string, text: string) => string;
+    getThinkingBorderColor: (level: string) => (text: string) => string;
+  }) => ({
     render(width: number) {
-      const effortLabel = `${theme.fg("dim", "Effort:")} ${readEffort(pi)}`;
+      const level = readEffort(pi);
+      // The label stays plain so it matches `Bal:`/`Accrued:`; only the level
+      // value carries the active theme's per-level thinking colour.
+      const effortLabel = `Effort: ${theme.getThinkingBorderColor(level)(level)}`;
       return buildWidgetLines(state, daily, ctx, theme, width, effortLabel);
     },
   }));

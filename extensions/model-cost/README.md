@@ -5,12 +5,12 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 ## 功能
 
 - **上下文预算进度条** — 当前上下文 token 用量 vs 显示预算，按比例着色；ChatGPT/Codex 固定为 272K，DeepSeek 默认 450K
-- **思考强度显示** — 在上下文进度条后方实时显示当前会话的有效思考强度（如 `Effort: high`）：auto 已解析为具体档位、并已按当前模型 clamp，因此会话内临时切换模型也会跟随；宿主无法提供档位时显示 `Effort: ?`。只在进度条出现的模式（DeepSeek / token-only / Codex）显示，其它模型不显示 widget
+- **思考强度显示** — 在上下文进度条后方实时显示当前会话的有效思考强度（如 `Effort: high`）：auto 已解析为具体档位、并已按当前模型 clamp，因此会话内临时切换模型也会跟随；宿主无法提供档位时显示 `Effort: ?`。`Effort:` 标签保持默认前景色（与 `Bal:` 一致），只有档位值按主题的档位色（`thinkingHigh` 等）着色。只在进度条出现的模式（DeepSeek / token-only / Codex）显示，其它模型不显示 widget
 - **即时费用显示** — 每回合和累计的 ¥ 花费、缓存命中率、命中缓存/未命中输入/输出费用比
 - **高峰/空闲动态计价** — 按北京时间工作日高峰/空闲自动切换价格；周末（周六、周日）全天不区分峰谷，统一按空闲价；进度条左侧显示 `🔥`（高峰）/`🌙`（空闲）。可用 `/budget holiday` 手动标记法定节假日，开启后一律按谷价计费、图标固定为 `🏖️`，直到 `/budget clear`
 - **每日花费追踪** — 按 session 分组统计，数据持久化到 `~/.omp/cost-archive/deepseek-cost.json`
 - **分段进度条** — 可视化每个 session 的费用占比，支持精细模式（≤ ¥20）和粗模式（> ¥20）
-- **余额查询** — 自动查询 DeepSeek 账户余额
+- **余额查询** — 自动查询 DeepSeek 账户余额；金额低于 ¥10 显示黄色、低于 ¥5 显示红色（`Bal:` 标签保持默认前景色），其余不着色
 - **Token-only 模式** — 当 `deepseek-v4-pro` / `deepseek-v4-flash` 模型经由其它 provider（如 opencode-go）提供时，只显示上下文进度条和 token 统计，不使用 RMB 计费、余额或每日累计；`deepseek-v4-flash-vision-exp` 与 `deepseek-flash` 仅在官方 deepseek provider 下识别
 - **双数据源 TTL 缓存** — 输入 `/model`、`/models`、`/switch` 时预取 DeepSeek 余额和 Codex 周额度，30 秒内不重复请求；UI 仍按当前模型展示对应缓存值
 - **ChatGPT/Codex 5h/7d 双额度节奏条** — 当当前模型为 `openai-codex` OAuth 模型时，同时显示 5 小时和 7 天两个额度窗口；每个窗口用 20 格单轴进度条编码已用额度和周期时间进度，显示 `quota% / time%`、重置倒计时和绝对时间（5h 倒计时精确到分钟，7d 保持小时）
