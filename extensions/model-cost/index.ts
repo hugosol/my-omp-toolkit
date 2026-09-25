@@ -26,6 +26,7 @@
  * Commands:
  *   /budget <N>K   — Override the DeepSeek display budget, capped at 1000K.
  *   /budget detail — Toggle detail / brief display mode.
+ *   /budget holiday — Force off-peak (holiday) pricing until /budget clear.
  *   /budget clear  — Archive current daily tracking file and start a fresh period.
  */
 
@@ -266,14 +267,15 @@ function buildWidgetLines(
   }
 
   // DeepSeek mode
-  const tier = state.turnCost.activeTier ?? resolvePriceTier(ctx.model?.id, now);
+  const dailyData = daily.read();
+  const holiday = dailyData.holiday === true;
+  const tier = state.turnCost.activeTier ?? resolvePriceTier(ctx.model?.id, now, holiday);
   if (!tier) return [];
 
   const period = state.turnCost.activePeriod ?? (isPeakHour(now) ? "peak" : "offPeak");
-  const periodIcon = period === "peak" ? "\u{1F525}" : "\u{1F319}";
+  const periodIcon = holiday ? "\u{1F3D6}\u{FE0F}" : period === "peak" ? "\u{1F525}" : "\u{1F319}";
 
   // Line 1: progress bar + balance + accrued spend + per-session segment bar
-  const dailyData = daily.read();
   const accruedCost = dailyData.totalCost;
   const segBar = buildSegmentBar(dailyData.sessions, accruedCost, theme);
 
@@ -491,7 +493,7 @@ export default function modelCost(pi: ExtensionAPI): void {
 
   // ── /budget command ──
   pi.registerCommand("budget", {
-    description: "Set the DeepSeek display budget, toggle detail, or clear daily tracking",
+    description: "Set the DeepSeek display budget, toggle detail, enable holiday pricing, or clear daily tracking",
     handler: async (args: string, ctx) => {
       const trimmed = args?.trim() ?? "";
 
@@ -500,6 +502,13 @@ export default function modelCost(pi: ExtensionAPI): void {
         const bal = await fetchBalance(ctx);
         state.balance = bal;
         const archived = await daily.archive(bal);
+        // Clear holiday pricing even when the archive was empty, so `/budget
+        // clear` always ends it. Best-effort, like archive() itself.
+        try {
+          await daily.setHoliday(false);
+        } catch {
+          // Unreadable archive: leave it untouched rather than failing clear.
+        }
         if (archived) {
           ctx.ui.notify(`Daily tracking archived → ${path.basename(archived)}`, "info");
         } else {
@@ -517,10 +526,31 @@ export default function modelCost(pi: ExtensionAPI): void {
         return;
       }
 
+      // /budget holiday — force off-peak (holiday) pricing until /budget clear
+      if (/^holiday$/i.test(trimmed)) {
+        if (classifyModelMode(ctx.model) !== "deepseek") {
+          ctx.ui.notify("Holiday pricing is only available in DeepSeek mode.", "warning");
+          return;
+        }
+        if (daily.read().holiday === true) {
+          ctx.ui.notify("Holiday pricing is already ON (until /budget clear)", "info");
+          return;
+        }
+        try {
+          await daily.setHoliday(true);
+        } catch {
+          ctx.ui.notify("Failed to enable holiday pricing: archive unreadable", "error");
+          return;
+        }
+        ctx.ui.notify("Holiday pricing ON — off-peak rates until /budget clear", "info");
+        refresh(state, daily, pi, ctx);
+        return;
+      }
+
       // /budget <N>K — set budget
       const m = trimmed.match(/^(\d+(?:\.\d+)?)\s*K?$/i);
       if (!m) {
-        ctx.ui.notify("Usage: /budget <number>K | /budget detail | /budget clear", "error");
+        ctx.ui.notify("Usage: /budget <number>K | /budget detail | /budget holiday | /budget clear", "error");
         return;
       }
       if (isOpenAICodexModel(ctx.model)) {
@@ -612,8 +642,13 @@ export default function modelCost(pi: ExtensionAPI): void {
   pi.on("before_provider_request", (_event, ctx) => {
     const now = new Date();
     const isDeepSeek = classifyModelMode(ctx.model) === "deepseek";
-    const tier = isDeepSeek ? resolvePriceTier(ctx.model?.id, now) : undefined;
-    anchorRequest(state.turnCost, tier, tier ? (isPeakHour(now) ? "peak" : "offPeak") : undefined);
+    const holiday = isDeepSeek && daily.read().holiday === true;
+    const tier = isDeepSeek ? resolvePriceTier(ctx.model?.id, now, holiday) : undefined;
+    anchorRequest(
+      state.turnCost,
+      tier,
+      tier ? (!holiday && isPeakHour(now) ? "peak" : "offPeak") : undefined,
+    );
     refresh(state, daily, pi, ctx);
   });
 

@@ -673,6 +673,125 @@ describe("model-cost budget provider gate", () => {
   });
 });
 
+describe("model-cost holiday pricing", () => {
+  const DEEPSEEK = { id: "deepseek-v4-pro", provider: "deepseek" };
+
+  test("/budget holiday enables it in DeepSeek mode and pins the widget icon", async () => {
+    await withTemporaryHome(async () => {
+      const { commands, handlers } = mountExtension();
+      const deepSeek = extensionContext(225_000, DEEPSEEK);
+
+      await fire(handlers, "agent_start", deepSeek.ctx);
+      await runCommand(commands, "budget", "holiday", deepSeek.ctx);
+
+      const data = JSON.parse(fs.readFileSync(path.join(process.env.HOME!, ".omp", "cost-archive", "deepseek-cost.json"), "utf-8")) as { holiday?: boolean };
+      const last = deepSeek.widgetCalls[deepSeek.widgetCalls.length - 1] ?? [];
+      expect({
+        flag: data.holiday,
+        notification: deepSeek.notifyCalls[deepSeek.notifyCalls.length - 1],
+        icon: last[0]?.startsWith("\u{1F3D6}\u{FE0F}"),
+      }).toEqual({
+        flag: true,
+        notification: {
+          message: "Holiday pricing ON — off-peak rates until /budget clear",
+          type: "info",
+        },
+        icon: true,
+      });
+    });
+  });
+
+  test("repeating /budget holiday reports it is already on", async () => {
+    await withTemporaryHome(async () => {
+      const { commands } = mountExtension();
+      const deepSeek = extensionContext(225_000, DEEPSEEK);
+
+      await runCommand(commands, "budget", "holiday", deepSeek.ctx);
+      await runCommand(commands, "budget", "holiday", deepSeek.ctx);
+
+      expect(deepSeek.notifyCalls[deepSeek.notifyCalls.length - 1]).toEqual({
+        message: "Holiday pricing is already ON (until /budget clear)",
+        type: "info",
+      });
+    });
+  });
+
+  test("/budget holiday is rejected outside the official DeepSeek provider", async () => {
+    await withTemporaryHome(async () => {
+      const { commands } = mountExtension();
+      const opencodeGo = extensionContext(
+        150_000,
+        { id: "deepseek-v4-flash", provider: "opencode-go" },
+      );
+
+      await runCommand(commands, "budget", "holiday", opencodeGo.ctx);
+
+      expect(opencodeGo.notifyCalls[opencodeGo.notifyCalls.length - 1]).toEqual({
+        message: "Holiday pricing is only available in DeepSeek mode.",
+        type: "warning",
+      });
+      expect(fs.existsSync(path.join(process.env.HOME!, ".omp", "cost-archive", "deepseek-cost.json"))).toBe(false);
+    });
+  });
+
+  test("/budget clear ends holiday pricing even when there is nothing to archive", async () => {
+    await withTemporaryHome(async () => {
+      const { commands } = mountExtension();
+      const deepSeek = extensionContext(225_000, DEEPSEEK);
+
+      await runCommand(commands, "budget", "holiday", deepSeek.ctx);
+      await runCommand(commands, "budget", "clear", deepSeek.ctx);
+
+      const data = JSON.parse(fs.readFileSync(path.join(process.env.HOME!, ".omp", "cost-archive", "deepseek-cost.json"), "utf-8")) as { holiday?: boolean };
+      const last = deepSeek.widgetCalls[deepSeek.widgetCalls.length - 1] ?? [];
+      expect(data.holiday).toBeUndefined();
+      expect(last[0]).not.toContain("\u{1F3D6}\u{FE0F}");
+    });
+  });
+
+  test("holiday pricing charges a peak-instant request at off-peak rates", async () => {
+    await withTemporaryHome(async () => {
+      const originalNow = Date.now;
+      // Monday 09:00 Beijing — peak on a normal weekday.
+      Date.now = () => new Date("2026-08-17T01:00:00.000Z").getTime();
+      try {
+        const { commands, handlers } = mountExtension();
+        const deepSeek = extensionContext(0, DEEPSEEK);
+        const stats = {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          orchestrationInput: 0,
+          orchestrationCacheRead: 0,
+          orchestrationOutput: 0,
+          totalTokens: 0,
+        };
+        deepSeek.ctx.sessionManager.getUsageStatistics = () => stats;
+
+        await fire(handlers, "session_start", deepSeek.ctx);
+        await runCommand(commands, "budget", "holiday", deepSeek.ctx);
+
+        stats.input = 1_000_000;
+        fireWithPayload(handlers, "before_provider_request", {}, deepSeek.ctx);
+        fireWithPayload(
+          handlers,
+          "message_end",
+          { message: { usage: { input: 1_000_000, cacheRead: 0, output: 0 } } },
+          deepSeek.ctx,
+        );
+        await fire(handlers, "agent_end", deepSeek.ctx);
+
+        const data = JSON.parse(fs.readFileSync(path.join(process.env.HOME!, ".omp", "cost-archive", "deepseek-cost.json"), "utf-8")) as { totalCost: number };
+        // Pro off-peak input is ¥4.5/M; the normal peak rate would be ¥9/M.
+        expect(data.totalCost).toBeCloseTo(4.5, 6);
+      } finally {
+        Date.now = originalNow;
+      }
+    });
+  });
+});
+
 describe("model-cost input dual fetch", () => {
   test("/model input fetches DeepSeek balance and Codex usage when cache is empty", async () => {
     let deepSeekCalls = 0;

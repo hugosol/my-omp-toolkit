@@ -190,3 +190,66 @@ describe("DailyTracker archive", () => {
     expect(fresh.start_bal).toBeUndefined();
   });
 });
+
+// ============================================================
+// setHoliday
+// ============================================================
+
+describe("DailyTracker setHoliday", () => {
+  test("turning holiday on writes the flag and survives a new tracker", async () => {
+    const t = freshTracker();
+    await t.setHoliday(true);
+    expect(t.read().holiday).toBe(true);
+
+    const t2 = createDailyTracker();
+    expect(t2.read().holiday).toBe(true);
+  });
+
+  test("turning holiday off removes the flag from disk", async () => {
+    const t = freshTracker();
+    await t.setHoliday(true);
+    await t.setHoliday(false);
+
+    expect(t.read().holiday).toBeUndefined();
+    const raw = JSON.parse(
+      fs.readFileSync(path.join(tempHome, ".omp", "cost-archive", "deepseek-cost.json"), "utf-8"),
+    ) as Record<string, unknown>;
+    expect("holiday" in raw).toBe(false);
+  });
+
+  test("turning holiday off with no flag present is a no-op and creates no file", async () => {
+    const t = freshTracker();
+    await t.setHoliday(false);
+
+    expect(fs.existsSync(path.join(tempHome, ".omp", "cost-archive", "deepseek-cost.json"))).toBe(false);
+    expect(t.read().holiday).toBeUndefined();
+  });
+
+  test("setting holiday preserves existing daily data", async () => {
+    const t = freshTracker();
+    await t.write({
+      start: "2024-01-01T00:00:00.000Z",
+      totalCost: 42,
+      totalTokens: { input: 1, cacheRead: 0, output: 0 },
+      sessions: [
+        { id: "s1", name: "test", lastInput: 1, lastCacheRead: 0, lastOutput: 0, cost: 42 },
+      ],
+    });
+    await t.setHoliday(true);
+
+    const data = t.read();
+    expect(data.holiday).toBe(true);
+    expect(data.totalCost).toBe(42);
+    expect(data.sessions).toHaveLength(1);
+  });
+
+  test("recordTurnCost keeps the holiday flag when merging a turn", async () => {
+    const t = freshTracker();
+    await t.setHoliday(true);
+    await t.recordTurnCost("s1", "test", { input: 10, cacheRead: 0, output: 5 }, 1.5);
+
+    const data = t.read();
+    expect(data.holiday).toBe(true);
+    expect(data.totalCost).toBe(1.5);
+  });
+});

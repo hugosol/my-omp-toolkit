@@ -63,11 +63,19 @@ export function isPeakHour(date: Date): boolean {
   return (ms >= PEAK_START_1 && ms <= PEAK_END_1) || (ms >= PEAK_START_2 && ms <= PEAK_END_2);
 }
 
-/** Resolve the effective price tier for a model at a given instant. */
-export function resolvePriceTier(modelId: string | undefined, date: Date): PriceTier | undefined {
+/**
+ * Resolve the effective price tier for a model at a given instant.
+ * `holiday` forces off-peak rates all day (DeepSeek bills statutory holidays
+ * and make-up work days as off-peak), until `/budget clear`.
+ */
+export function resolvePriceTier(
+  modelId: string | undefined,
+  date: Date,
+  holiday = false,
+): PriceTier | undefined {
   const schedule = priceForModel(modelId);
   if (!schedule) return undefined;
-  return isPeakHour(date) ? schedule.peak : schedule.offPeak;
+  return !holiday && isPeakHour(date) ? schedule.peak : schedule.offPeak;
 }
 
 /** Absolute time (ms) of the next peak/off-peak boundary strictly after `date`. */

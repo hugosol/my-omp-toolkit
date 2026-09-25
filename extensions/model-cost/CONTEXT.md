@@ -82,8 +82,22 @@ _Avoid_: credits, overage (alone)
 The property that one unit of Codex usage consumes both windows' quotas, making their percentage movements proportional.
 _Avoid_: shared pool (that names the cross-product allowance pool)
 
+### Pricing
+
+**Peak / off-peak**:
+The two DeepSeek price tiers. Peak applies on weekday Beijing `[09:00, 12:00]` and `[14:00, 18:00]` (inclusive); everything else, including all weekends, is off-peak.
+_Avoid_: high/low rate, 高峰价/谷价（as bare nouns）
+
+**Holiday pricing**:
+The manual override that prices every DeepSeek request at off-peak until `/budget clear`; enabled with `/budget holiday`, stored as `holiday: true` in the daily archive, and shown as `🏖️`. It covers statutory holidays and make-up work days that the clock rule would otherwise bill as peak. It is a flag, not a recorded fact: requests made before it is enabled keep their peak cost, so an archive's `holiday` field only records the state at archive time.
+_Avoid_: holiday mode, off-peak override, 谷价开关
+
 ### Existing widget language
 
 **Pacing**:
 The relationship between quota consumed and time elapsed inside one window, encoded by the existing progress bars.
 _Avoid_: progress, remaining
+
+**Period icon**:
+The glyph leading the DeepSeek widget line that encodes the pricing period: `🔥` for peak, `🌙` for off-peak, and `🏖️` for holiday pricing. `🏖️` is a pure function of the holiday flag and does not switch with time of day.
+_Avoid_: emoji, status icon

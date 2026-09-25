@@ -6,7 +6,7 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 
 - **上下文预算进度条** — 当前上下文 token 用量 vs 显示预算，按比例着色；ChatGPT/Codex 固定为 272K，DeepSeek 默认 450K
 - **即时费用显示** — 每回合和累计的 ¥ 花费、缓存命中率、命中缓存/未命中输入/输出费用比
-- **高峰/空闲动态计价** — 按北京时间工作日高峰/空闲自动切换价格；周末（周六、周日）全天不区分峰谷，统一按空闲价；进度条左侧显示 `🔥`（高峰）/ `🌙`（空闲）
+- **高峰/空闲动态计价** — 按北京时间工作日高峰/空闲自动切换价格；周末（周六、周日）全天不区分峰谷，统一按空闲价；进度条左侧显示 `🔥`（高峰）/`🌙`（空闲）。可用 `/budget holiday` 手动标记法定节假日，开启后一律按谷价计费、图标固定为 `🏖️`，直到 `/budget clear`
 - **每日花费追踪** — 按 session 分组统计，数据持久化到 `~/.omp/cost-archive/deepseek-cost.json`
 - **分段进度条** — 可视化每个 session 的费用占比，支持精细模式（≤ ¥20）和粗模式（> ¥20）
 - **余额查询** — 自动查询 DeepSeek 账户余额
@@ -17,7 +17,7 @@ Session 级别的 token 用量和费用追踪扩展。在 OMP 状态栏区域显
 
 ## 定价
 
-基于 DeepSeek 官方价格表（RMB / 百万 tokens）；flash 系列自北京时间 2026-09-10 12:00 起执行新价。工作日高峰时段为北京时间 `[09:00, 12:00]` 和 `[14:00, 18:00]`（闭区间，边界按高峰计）；周末（周六、周日）全天不区分峰谷，统一按空闲（低谷）时段价格计费。
+基于 DeepSeek 官方价格表（RMB / 百万 tokens）；flash 系列自北京时间 2026-09-10 12:00 起执行新价。工作日高峰时段为北京时间 `[09:00, 12:00]` 和 `[14:00, 18:00]`（闭区间，边界按高峰计）；周末（周六、周日）全天不区分峰谷，统一按空闲（低谷）时段价格计费。按 DeepSeek 官方《API 峰谷时间说明》，调休上班的周末与中国法定节假日全天均按空闲时段计费；周末已由时段规则自动按谷价处理，`/budget holiday` 用于手动标记**工作日**的法定节假日，开启后直到 `/budget clear` 为止一律按谷价计费。
 
 | 模型 | 时段 | input（cache miss） | cacheRead（cache hit） | output |
 |------|------|------|------|------|
@@ -60,9 +60,10 @@ DeepSeek 费用分支仅在 provider 为 `deepseek` 且模型 ID 命中以上模
 | `/budget 300`、`/budget 300K` | 在 DeepSeek 模式设置 300,000 token 的显示预算 |
 | `/budget 0` | 恢复 DeepSeek 默认显示预算 450K |
 | `/budget detail` | 切换显示模式：简略 / 详细 |
+| `/budget holiday` | 在官方 DeepSeek 模式手动开启假日谷价计费，直到 `/budget clear` |
 | `/budget clear` | 归档当前追踪数据并重置，开始新周期 |
 
-数字预算只允许在 provider 为 `deepseek` 的 DeepSeek 模式下设置；opencode-go 等其它 provider 即使模型 ID 是已知 DeepSeek 模型也会拒绝。ChatGPT/Codex 始终固定为 272K，其他模型会拒绝修改。K 按十进制 1,000 换算并允许小数；正数超过 1000K 时静默截断为 1000K，不支持 `M` 后缀。
+数字预算只允许在 provider 为 `deepseek` 的 DeepSeek 模式下设置；opencode-go 等其它 provider 即使模型 ID 是已知 DeepSeek 模型也会拒绝。ChatGPT/Codex 始终固定为 272K，其他模型会拒绝修改。K 按十进制 1,000 换算并允许小数；正数超过 1000K 时静默截断为 1000K，不支持 `M` 后缀。`/budget holiday` 同样只在官方 deepseek provider 下可用，其它模式会被拒绝；它把 `holiday: true` 写入 `deepseek-cost.json`，属于账户级标志，多 session / 多进程共享且跨重启存活，`/budget clear` 会清除它。
 
 ## 原理
 
@@ -72,6 +73,8 @@ DeepSeek 费用分支仅在 provider 为 `deepseek` 且模型 ID 命中以上模
 - `lastInput` / `lastCacheRead` / `lastOutput` — 上次已知的累计值
 - `cost` — 该 session 累计花费
 
+文档顶层还可能有 `holiday: true` —— `/budget holiday` 写入的假日谷价标志，仅在开启时存在，由 `setHoliday` 在锁内增删，`/budget clear` 会删除它。它是计价覆盖开关而非计费结果：开启前已按峰价计费的请求不会追溯改写，归档里的 `holiday` 也只表示归档时的状态。
+
 token 增量仍在 `agent_end` 用累计值计算，用于更新 `totalTokens` 和 `last*`；费用则由回合内每次 API 请求的 `message_end` 按锚定价累加，`agent_end` 时把 `turnCost` 通过 `daily-tracker` 的 `recordTurnCost` 写入每日总花费和 session 花费。使用"上次已知值"而非"上一回合的 previousTotal"，确保 fork / resume 后不会重复计算 token。
 
 状态栏的三组分费用比（命中缓存/未命中输入/输出）由当前生效价格档实时计算，不写入每日归档 JSON。
@@ -80,7 +83,7 @@ token 增量仍在 `agent_end` 用累计值计算，用于更新 `totalTokens` �
 
 多个 CLI 进程（或同一进程中的多个 session）各自持有一个 `DailyTracker` 实例，但共享 `~/.omp/cost-archive/deepseek-cost.json`：
 
-- 所有变更（`recordTurnCost` / `ensureSession` / `write` / `archive`）通过 OMP 原生跨进程文件锁（`@oh-my-pi/pi-utils/file-lock`：Windows 命名互斥体、Linux abstract Unix socket、其他平台 `flock`）串行化；等待预算为 300 次 × 50ms（15s），落在 OMP 扩展 handler 的 30s 上限内。
+- 所有变更（`recordTurnCost` / `ensureSession` / `write` / `setHoliday` / `archive`）通过 OMP 原生跨进程文件锁（`@oh-my-pi/pi-utils/file-lock`：Windows 命名互斥体、Linux abstract Unix socket、其他平台 `flock`）串行化；等待预算为 300 次 × 50ms（15s），落在 OMP 扩展 handler 的 30s 上限内。
 - 锁内重新读取磁盘上的最新数据、合并变更，最后写临时文件 + `rename` 原子发布——任何进程都不会覆盖其他进程刚写入的费用。Windows 上 `rename` 碰到读进程短暂持有文件时自动带退避重试。
 - 读路径不加锁，但按 `size + mtime` 缓存失效，因此一个 CLI 的 Accrued 会实时反映另一个 CLI 的累计费用。
 - 损坏的 JSON 不会被静默重置为空白归档：显示回退到最后一次成功快照，写路径在锁内报错并交由调用方 best-effort 处理。

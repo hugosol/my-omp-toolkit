@@ -41,12 +41,22 @@ export interface DailyData {
   sessions: DailySession[];
   start_bal?: number;
   end_bal?: number;
+  /**
+   * When true, DeepSeek requests are priced at off-peak (holiday) rates until
+   * `/budget clear`. Present only while active; a missing field means off.
+   */
+  holiday?: boolean;
 }
 
 export interface DailyTracker {
   read(): DailyData;
   write(data: DailyData): Promise<void>;
   archive(balance: number | null): Promise<string | null>;
+  /**
+   * Turn holiday (forced off-peak) pricing on or off. A no-op when turning it
+   * off with no flag present, so it never creates a file just to clear.
+   */
+  setHoliday(on: boolean): Promise<void>;
   ensureSession(
     sessionId: string,
     sessionName: string,
@@ -143,6 +153,26 @@ export function createDailyTracker(): DailyTracker {
 
   function write(data: DailyData): Promise<void> {
     return withArchiveLock(DAILY_DOCUMENT, async () => {
+      publish(data);
+    });
+  }
+
+  /**
+   * Read-merge-write the holiday flag under the lock. Turning it off when the
+   * flag is already absent (or the file is missing) is a no-op, so `/budget
+   * clear` never creates an empty archive just to clear it.
+   */
+  function setHoliday(on: boolean): Promise<void> {
+    return withArchiveLock(DAILY_DOCUMENT, async () => {
+      const data = readFromDisk();
+      if (on) {
+        if (data.holiday === true) return;
+        data.holiday = true;
+        publish(data);
+        return;
+      }
+      if (data.holiday !== true) return;
+      delete data.holiday;
       publish(data);
     });
   }
@@ -260,5 +290,5 @@ export function createDailyTracker(): DailyTracker {
     });
   }
 
-  return { read, write, archive, ensureSession, recordTurnCost };
+  return { read, write, archive, setHoliday, ensureSession, recordTurnCost };
 }

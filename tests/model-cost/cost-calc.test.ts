@@ -227,6 +227,18 @@ describe("resolvePriceTier", () => {
     expect(resolvePriceTier("deepseek-v4-flash-vision-exp", new Date("2026-08-22T10:00:00.000Z"))).toEqual(FLASH_OFF_PEAK);
   });
 
+  test("forces pro off-peak tier at weekday peak when holiday pricing is on", () => {
+    expect(resolvePriceTier("deepseek-v4-pro", peakDate, true)).toEqual(PRO_OFF_PEAK);
+  });
+
+  test("forces flash off-peak tier at weekday peak when holiday pricing is on", () => {
+    expect(resolvePriceTier("deepseek-flash", peakDate, true)).toEqual(FLASH_OFF_PEAK);
+  });
+
+  test("holiday pricing keeps an off-peak instant at off-peak", () => {
+    expect(resolvePriceTier("deepseek-v4-pro", offPeakDate, true)).toEqual(PRO_OFF_PEAK);
+  });
+
   test("returns undefined for unsupported model", () => {
     expect(resolvePriceTier("gpt-5", peakDate)).toBeUndefined();
   });
