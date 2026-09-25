@@ -219,7 +219,10 @@ function buildChatGPTWidgetLines(
 async function fetchBalance(ctx: ExtensionContext): Promise<number | null> {
   try {
     const resolver = ctx.modelRegistry.resolver(BALANCE_PROVIDER);
-    const apiKey = await resolver({ lastChance: false, error: undefined });
+    // OMP < 18.3 resolves a bare bearer string; OMP >= 18.3 resolves
+    // `{ apiKey, credentialId }`. Accept both so the widget survives host updates.
+    const resolved = await resolver({ lastChance: false, error: undefined });
+    const apiKey = typeof resolved === "string" ? resolved : resolved?.apiKey;
     if (!apiKey) return null;
     const rawBase = ctx.modelRegistry.getProviderBaseUrl(BALANCE_PROVIDER) ?? "https://api.deepseek.com";
     const base = rawBase.replace(/\/v1\/?$/, "");

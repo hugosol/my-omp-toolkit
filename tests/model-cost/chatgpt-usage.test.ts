@@ -41,15 +41,36 @@ function installFakeOmpModules(modules: {
 }
 
 function scopedAuthCtx(overrides: {
-  accounts?: Array<{ position: number; accountId?: string; email?: string }>;
+  accounts?: Array<{ position: number; credentialId?: number; accountId?: string; email?: string }>;
   access?: { ok: true; accessToken: string; accountId?: string; email?: string } | { ok: false; error: string };
   fetchUsageReports?: () => Promise<unknown>;
+  /** "namespace" models OMP >= 18.3 (`authStorage.oauth.*`), "flat" the legacy API. */
+  shape?: "flat" | "namespace";
 } = {}) {
-  const authStorage = {
-    listOAuthAccounts: () => overrides.accounts ?? [{ position: 0, accountId: "acct-1", email: "u@example.com" }],
-    getOAuthAccessAt: async () => overrides.access ?? { ok: true, accessToken: "token-1", accountId: "acct-1", email: "u@example.com" },
-    fetchUsageReports: overrides.fetchUsageReports ?? (async () => { throw new Error("aggregate usage must not be called"); }),
-  };
+  const accounts = overrides.accounts ?? [{ position: 0, credentialId: 0, accountId: "acct-1", email: "u@example.com" }];
+  const access = overrides.access ?? { ok: true, accessToken: "token-1", accountId: "acct-1", email: "u@example.com" };
+  const fetchUsageReports = overrides.fetchUsageReports ?? (async () => { throw new Error("aggregate usage must not be called"); });
+  const authStorage = overrides.shape === "namespace"
+    ? {
+        oauth: {
+          accounts: () => accounts,
+          accessById: async (_provider: string, credentialId: number) => {
+            const account = accounts.find(a => (a.credentialId ?? a.position) === credentialId);
+            if (!account) return undefined;
+            return {
+              ...access,
+              ...(account.accountId ? { accountId: account.accountId } : {}),
+              ...(account.email ? { email: account.email } : {}),
+            };
+          },
+        },
+        fetchUsageReports,
+      }
+    : {
+        listOAuthAccounts: () => accounts,
+        getOAuthAccessAt: async () => access,
+        fetchUsageReports,
+      };
   return {
     modelRegistry: { authStorage },
     sessionManager: { getSessionId: () => "s1" },
@@ -894,9 +915,45 @@ describe("scoped ChatGPT usage fetch", () => {
     expect(seenCredential?.accountId).toBe("first");
   });
 
+  test("resolves the first account through the OMP >= 18.3 oauth namespace", async () => {
+    process.env.PI_PROXY = "http://generic-proxy";
+    let seenCredential: Record<string, unknown> | undefined;
+    installFakeOmpModules({
+      fetchUsage: async (params: { credential?: Record<string, unknown> }) => {
+        seenCredential = params.credential;
+        return { provider: "openai-codex", fetchedAt: 1, limits: [] };
+      },
+    });
+    // Durable row ids differ from array positions; the namespace path must use
+    // credentialId (10) rather than position (0).
+    const ctx = scopedAuthCtx({
+      shape: "namespace",
+      accounts: [
+        { position: 0, credentialId: 10, accountId: "first", email: "first@example.com" },
+        { position: 1, credentialId: 11, accountId: "second", email: "second@example.com" },
+      ],
+      access: { ok: true, accessToken: "token-first" },
+    });
+
+    await fetchChatGPTUsage(ctx);
+
+    expect(seenCredential?.accessToken).toBe("token-first");
+    expect(seenCredential?.accountId).toBe("first");
+  });
+
   test("OAuth access failure returns an authentication error", async () => {
     installFakeOmpModules({});
     const result = await fetchChatGPTUsage(scopedAuthCtx({
+      access: { ok: false, error: "refresh failed" },
+    }));
+    expect(result?.kind).toBe("auth");
+    expect(result?.error).toContain("refresh failed");
+  });
+
+  test("namespace OAuth access failure returns an authentication error", async () => {
+    installFakeOmpModules({});
+    const result = await fetchChatGPTUsage(scopedAuthCtx({
+      shape: "namespace",
       access: { ok: false, error: "refresh failed" },
     }));
     expect(result?.kind).toBe("auth");

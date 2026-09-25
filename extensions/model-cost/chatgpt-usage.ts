@@ -18,6 +18,8 @@ const USAGE_TIMEOUT_MS = 10_000;
 
 interface AccountLike {
   position: number;
+  /** Durable credential row id; OMP >= 18.3 `oauth.accounts()` supplies it. */
+  credentialId?: number;
   accountId?: string;
   email?: string;
 }
@@ -38,13 +40,25 @@ interface OAuthAccessFailLike {
 
 type OAuthAccessLike = OAuthAccessOkLike | OAuthAccessFailLike;
 
+interface OAuthNamespaceLike {
+  accounts(provider: string, sessionId?: string): AccountLike[];
+  accessById(
+    provider: string,
+    credentialId: number,
+    options?: { signal?: AbortSignal },
+  ): Promise<OAuthAccessLike | undefined>;
+}
+
 interface AuthStorageLike {
-  listOAuthAccounts(provider: string, sessionId?: string): AccountLike[];
-  getOAuthAccessAt(
+  /** OMP < 18.3 flat OAuth API. */
+  listOAuthAccounts?(provider: string, sessionId?: string): AccountLike[];
+  getOAuthAccessAt?(
     provider: string,
     position: number,
     options?: { signal?: AbortSignal },
   ): Promise<OAuthAccessLike | undefined>;
+  /** OMP >= 18.3 namespace that replaced the flat methods. */
+  oauth?: OAuthNamespaceLike;
 }
 
 interface UsageFetchContextLike {
@@ -165,6 +179,43 @@ function errorSnapshot(state: ChatGPTUsageState): ChatGPTUsageSnapshot {
   return { fiveHour: state, weekly: state };
 }
 
+type OAuthAccessResult =
+  | { ok: true; access: OAuthAccessOkLike }
+  | { ok: false; error: string };
+
+/**
+ * Resolve the first stored Codex OAuth credential across host versions:
+ * OMP < 18.3 exposes `listOAuthAccounts` / `getOAuthAccessAt`; OMP >= 18.3
+ * removed them in favour of `authStorage.oauth.accounts` + `accessById`.
+ */
+async function resolveCodexOAuthAccess(
+  auth: AuthStorageLike,
+  sessionId: string | undefined,
+): Promise<OAuthAccessResult> {
+  const { oauth } = auth;
+  if (oauth && typeof oauth.accounts === "function" && typeof oauth.accessById === "function") {
+    const credentialId = oauth.accounts(CODEX_PROVIDER, sessionId)?.[0]?.credentialId;
+    if (typeof credentialId !== "number") return { ok: false, error: "no Codex OAuth account" };
+    const access = await oauth.accessById(CODEX_PROVIDER, credentialId);
+    if (!access || !access.ok) {
+      return { ok: false, error: access && "error" in access ? access.error : "OAuth access failed" };
+    }
+    return { ok: true, access };
+  }
+
+  if (typeof auth.listOAuthAccounts === "function" && typeof auth.getOAuthAccessAt === "function") {
+    const accounts = auth.listOAuthAccounts(CODEX_PROVIDER, sessionId);
+    if (!accounts || accounts.length === 0) return { ok: false, error: "no Codex OAuth account" };
+    const access = await auth.getOAuthAccessAt(CODEX_PROVIDER, accounts[0].position);
+    if (!access || !access.ok) {
+      return { ok: false, error: access && "error" in access ? access.error : "OAuth access failed" };
+    }
+    return { ok: true, access };
+  }
+
+  return { ok: false, error: "auth storage is missing the OAuth account API" };
+}
+
 /**
  * Fetch the first stored Codex OAuth account's five-hour and weekly usage
  * through the public Codex usage provider, with a request-scoped provider
@@ -183,15 +234,11 @@ export async function fetchChatGPTUsageSnapshot(
   try {
     const auth = ctx.modelRegistry.authStorage;
     const sessionId = ctx.sessionManager.getSessionId();
-    const accounts = auth.listOAuthAccounts(CODEX_PROVIDER, sessionId);
-    if (!accounts || accounts.length === 0) {
-      return errorSnapshot(errorState("auth", "no Codex OAuth account"));
+    const resolved = await resolveCodexOAuthAccess(auth, sessionId);
+    if (!resolved.ok) {
+      return errorSnapshot(errorState("auth", resolved.error));
     }
-
-    const access = await auth.getOAuthAccessAt(CODEX_PROVIDER, accounts[0].position);
-    if (!access || !access.ok) {
-      return errorSnapshot(errorState("auth", access && "error" in access ? access.error : "OAuth access failed"));
-    }
+    const access = resolved.access;
 
     const proxy = modules.getProxyForProvider
       ? modules.getProxyForProvider(CODEX_PROVIDER)

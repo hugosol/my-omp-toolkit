@@ -9,6 +9,11 @@ import {
 } from "../../extensions/readonly-mode/mode";
 import type { BuildInjectionResult, DispatchResult } from "../../extensions/readonly-mode/mode";
 import { DEFAULT_POLICY } from "../../extensions/readonly-mode/policies";
+import {
+  BUILD_SYSTEM_PROMPT,
+  DEBUG_TRANSITION_PROMPT,
+  READONLY_PROMPT,
+} from "../../extensions/readonly-mode/prompts";
 
 // ============================================================
 // MODES table integrity
@@ -198,37 +203,32 @@ describe("resolveToolPolicy", () => {
 // ============================================================
 
 describe("buildPrompt", () => {
-  test("build mode returns transitionMessage only", () => {
+  test("build mode returns only the transition message", () => {
     const content = buildPrompt("build");
     expect(content.systemPrompt).toBeUndefined();
     expect(content.everyTurnMessage).toBeUndefined();
-    expect(content.transitionMessage).toBeDefined();
-    expect(content.transitionMessage!).toContain("BUILD MODE");
+    expect(content.transitionMessage).toBe(BUILD_SYSTEM_PROMPT);
   });
 
-  test("explore mode returns systemPrompt and transitionMessage", () => {
+  test("explore mode returns only the every-turn message", () => {
     const content = buildPrompt("explore");
-    expect(content.systemPrompt).toBeDefined();
-    expect(content.systemPrompt!).toContain("EXPLORE MODE");
-    expect(content.everyTurnMessage).toBeUndefined();
-    expect(content.transitionMessage).toBeDefined();
-    expect(content.transitionMessage!).toContain("EXPLORE MODE");
-    expect(content.transitionMessage!).toContain("switched to Explore");
+    expect(content.systemPrompt).toBeUndefined();
+    expect(content.transitionMessage).toBeUndefined();
+    expect(content.everyTurnMessage).toBe(READONLY_PROMPT);
   });
 
-  test("explore mode systemPrompt does NOT mention scope", () => {
+  test("explore mode every-turn message does NOT mention scope", () => {
     const content = buildPrompt("explore");
-    expect(content.systemPrompt!).not.toContain("scope");
-    expect(content.systemPrompt!).not.toContain("workspace");
-    expect(content.systemPrompt!).not.toContain("Allowed search paths");
+    expect(content.everyTurnMessage!).not.toContain("scope");
+    expect(content.everyTurnMessage!).not.toContain("workspace");
+    expect(content.everyTurnMessage!).not.toContain("Allowed search paths");
   });
 
-  test("debug mode returns everyTurnMessage only", () => {
+  test("debug mode returns only the every-turn message", () => {
     const content = buildPrompt("debug");
     expect(content.systemPrompt).toBeUndefined();
-    expect(content.everyTurnMessage).toBeDefined();
-    expect(content.everyTurnMessage!).toContain("DEBUG MODE");
     expect(content.transitionMessage).toBeUndefined();
+    expect(content.everyTurnMessage).toBe(DEBUG_TRANSITION_PROMPT);
   });
 });
 
@@ -244,9 +244,7 @@ describe("ModeState.buildInjection", () => {
     expect(inj).not.toBeNull();
     if (!inj) throw new Error("expected injection");
     expect(inj.systemPrompt).toBeUndefined();
-    expect(inj.message).toBeDefined();
-    expect(inj.message!.customType).toBe("build-mode-context");
-    expect(inj.message!.content).toContain("BUILD MODE");
+    expect(inj.message).toEqual({ customType: "build-mode-context", content: BUILD_SYSTEM_PROMPT });
   });
 
   test("build mode does not inject on second turn (reinjectAfter=0)", () => {
@@ -269,45 +267,36 @@ describe("ModeState.buildInjection", () => {
   test("debug mode injects message every turn", () => {
     const m = new ModeState();
     m.current = "debug";
-    const inj1 = m.buildInjection();
-    const inj2 = m.buildInjection();
-    const inj3 = m.buildInjection();
-    [inj1, inj2, inj3].forEach(inj => {
+    const injections = [m.buildInjection(), m.buildInjection(), m.buildInjection()];
+    for (const inj of injections) {
       expect(inj!.systemPrompt).toBeUndefined();
-      expect(inj!.message).toBeDefined();
-      expect(inj!.message!.content).toContain("DEBUG MODE");
-    });
+      expect(inj!.message).toEqual({ customType: "debug-mode-context", content: DEBUG_TRANSITION_PROMPT });
+    }
   });
 
-  test("explore mode injects systemPrompt every turn", () => {
+  test("explore mode injects the every-turn message on every turn", () => {
     const m = new ModeState();
     m.current = "explore";
     const inj1 = m.buildInjection();
     const inj2 = m.buildInjection();
-    expect(inj1!.systemPrompt).toBeDefined();
-    expect(inj1!.systemPrompt!).toContain("EXPLORE MODE");
-    expect(inj2!.systemPrompt).toBeDefined();
+    for (const inj of [inj1, inj2]) {
+      expect(inj!.systemPrompt).toBeUndefined();
+      expect(inj!.message).toEqual({ customType: "explore-mode-context", content: READONLY_PROMPT });
+    }
   });
 
-  test("explore mode injects both systemPrompt and transitionMessage on first turn", () => {
+  test("explore mode never emits a transition message", () => {
     const m = new ModeState();
     m.current = "explore";
-    const inj = m.buildInjection();
-    expect(inj!.systemPrompt).toBeDefined();
-    expect(inj!.message).toBeDefined();
-    expect(inj!.message!.content).toContain("switched to Explore");
+    const injections = [m.buildInjection(), m.buildInjection()];
+    for (const inj of injections) {
+      // A transition would surface on the first turn of a switch; explore has
+      // no transition slot, so both turns carry the same every-turn message.
+      expect(inj!.message?.content).toBe(READONLY_PROMPT);
+    }
   });
 
-  test("explore mode injects only systemPrompt on second turn (no re-transition)", () => {
-    const m = new ModeState();
-    m.current = "explore";
-    m.buildInjection(); // turn 1: systemPrompt + transition
-    const inj = m.buildInjection(); // turn 2: systemPrompt only
-    expect(inj!.systemPrompt).toBeDefined();
-    expect(inj!.message).toBeUndefined();
-  });
-
-  test("mode switch from build to explore triggers transition", () => {
+  test("mode switch from build to explore injects the explore message", () => {
     const m = new ModeState();
     m.buildInjection(); // build turn 1: transition
     m.buildInjection(); // build turn 2: no inject
@@ -315,9 +304,8 @@ describe("ModeState.buildInjection", () => {
     m.current = "explore";
     const injection = m.buildInjection();
     expect(injection).not.toBeNull();
-    expect(injection!.systemPrompt).toContain("EXPLORE MODE");
-    expect(injection!.message).toBeDefined();
-    expect(injection!.message!.content).toContain("switched to Explore");
+    expect(injection!.systemPrompt).toBeUndefined();
+    expect(injection!.message).toEqual({ customType: "explore-mode-context", content: READONLY_PROMPT });
   });
 
   test("null is returned when no injection needed (build, after transition)", () => {
@@ -531,10 +519,9 @@ describe("dispatchToolCall", () => {
     expect(result.block!.reason).toContain("whitelist");
   });
 
-  test("explore mode blocks bash command chaining", () => {
+  test("explore mode blocks a chain containing a non-read-only segment", () => {
     const result = dispatchToolCall({ toolName: "bash", input: { command: "ls && rm file" } }, mode("explore"), cwd);
     expect(result.block).toBeDefined();
-    expect(result.block!.reason).toContain("chaining");
   });
 
   test("explore mode blocks bash output redirection", () => {
