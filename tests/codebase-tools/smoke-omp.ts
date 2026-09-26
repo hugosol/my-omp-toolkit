@@ -4,8 +4,9 @@
  *
  *   bun tests/codebase-tools/smoke-omp.ts
  *
- * Checks the `/codebase-tools` toggle, init-once-then-reminder injection, state
- * persistence through appendEntry, resume restore, and subagent inheritance.
+ * Checks the `/codebase-tools` toggle, the above-editor marker, init-once-then-
+ * reminder injection, state persistence through appendEntry, resume restore, and
+ * subagent inheritance.
  */
 import { expect } from "bun:test";
 
@@ -28,10 +29,10 @@ const INIT_TYPE = "codebase-tools:init";
 const REMINDER_TYPE = "codebase-tools:reminder";
 const STATE_TYPE = "codebase-tools:state";
 
-const statuses: Array<{ key: string; text: string | undefined }> = [];
+const widgets: Array<{ key: string; content: unknown; placement: string | undefined }> = [];
 const fakeUi = {
-	setStatus: (key: string, text: string | undefined): void => {
-		statuses.push({ key, text });
+	setWidget: (key: string, content: unknown, options?: { placement?: string }): void => {
+		widgets.push({ key, content, placement: options?.placement });
 	},
 	notify: (): void => {},
 };
@@ -111,23 +112,33 @@ function makeRunner(manager: unknown, agent: unknown) {
 const mainManager = SessionManager.create(tmp);
 const mainRunner = makeRunner(mainManager, MAIN_AGENT);
 await mainRunner.emit({ type: "session_start" });
-expect(statuses[statuses.length - 1]).toEqual({ key: "codebase-tools", text: undefined });
+expect(widgets).toEqual([]);
 expect(await mainRunner.emitBeforeAgentStart("hi", undefined, ["base-system"])).toBeUndefined();
-pass("main session starts off");
+pass("main session starts off with no marker");
 
 const command = mainRunner.getCommand("codebase-tools");
 expect(command).toBeDefined();
 await command!.handler("", mainRunner.createCommandContext());
-expect(mainManager.getEntries().some(entry => entry.type === "custom" && entry.customType === STATE_TYPE)).toBe(true);
-pass("/codebase-tools toggles on and persists state");
+expect(widgets[widgets.length - 1]).toEqual({
+	key: "codebase-tools",
+	content: ["◈ codeBaseTools"],
+	placement: "aboveEditor",
+});
+expect(
+	mainManager
+		.getEntries()
+		.some((entry: { type?: string; customType?: string }) => entry.type === "custom" && entry.customType === STATE_TYPE),
+).toBe(true);
+pass("/codebase-tools toggles on, marks the editor above, persists state");
 
 const first = await mainRunner.emitBeforeAgentStart("hi", undefined, ["base-system"]);
 expect(first?.messages?.[0]?.customType).toBe(INIT_TYPE);
+expect(widgets[widgets.length - 1]?.content).toEqual(["◈ codeBaseTools"]);
 const second = await mainRunner.emitBeforeAgentStart("again", undefined, ["base-system"]);
 expect(second?.messages?.[0]?.customType).toBe(REMINDER_TYPE);
-pass("first enabled turn injects init, then reminder");
+pass("first enabled turn injects init, then reminder, re-asserting the marker");
 
-// --- resume: persisted on + initInjected -> reminder only ---
+// --- resume: persisted on + initInjected -> reminder only, marker on first turn ---
 const resumedManager = SessionManager.create(tmp);
 resumedManager.appendCustomEntry(STATE_TYPE, { on: true, initInjected: true });
 const resumedRunner = makeRunner(resumedManager, MAIN_AGENT);
@@ -135,6 +146,7 @@ await resumedRunner.emit({ type: "session_start" });
 expect((await resumedRunner.emitBeforeAgentStart("hi", undefined, ["base-system"]))?.messages?.[0]?.customType).toBe(
 	REMINDER_TYPE,
 );
+expect(widgets[widgets.length - 1]?.content).toEqual(["◈ codeBaseTools"]);
 pass("resume restores on + initInjected, no duplicate init");
 
 // --- resume: on but not initialized -> init ---

@@ -12,6 +12,9 @@
  * Extension factories are rebound per session (main and every subagent), and the
  * module graph is evaluated once, so `globalOn` is shared across invocations: a
  * subagent inherits the main session's toggle while keeping its own init state.
+ *
+ * The UI marker is an `aboveEditor` widget re-asserted every enabled turn, so it
+ * renders after the read-only widget and sits directly below it.
  */
 import type {
 	BeforeAgentStartEvent,
@@ -24,19 +27,20 @@ import { INIT_PROMPT, REMINDER_PROMPT } from "./prompts";
 import {
 	DEFAULT_STATE,
 	INIT_MESSAGE_TYPE,
+	MARKER_LINE,
 	REMINDER_MESSAGE_TYPE,
 	STATE_CUSTOM_TYPE,
 	type CodebaseToolsState,
 	injectionFor,
 	markedInit,
 	readState,
-	statusText,
 	toggled,
 } from "./state";
 
 export const name = "codeBaseTools";
 
-const STATUS_KEY = "codebase-tools";
+const WIDGET_KEY = "codebase-tools";
+const WIDGET_OPTIONS = { placement: "aboveEditor" } as const;
 
 /** Shared across main/subagent factory invocations; only a main session writes it. */
 let globalOn = false;
@@ -55,15 +59,14 @@ export default function codeBaseTools(pi: ExtensionAPI): void {
 		state = readState(ctx.sessionManager.getBranch());
 		// Only the main session owns the process-wide toggle; subagents inherit it.
 		if (ctx.agent.kind === "main") globalOn = state.on;
-		ctx.ui.setStatus(STATUS_KEY, statusText(ctx.agent.kind === "main" ? state.on : globalOn));
 	};
 
-	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+	pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
 		restore(ctx);
 	});
 
 	// `new` / `fork` land on a branch without our state entry (off); `resume` restores it.
-	pi.on("session_switch", async (_event, ctx: ExtensionContext) => {
+	pi.on("session_switch", async (_event: unknown, ctx: ExtensionContext) => {
 		restore(ctx);
 	});
 
@@ -72,8 +75,11 @@ export default function codeBaseTools(pi: ExtensionAPI): void {
 		const kind = injectionFor({ on: enabled, initInjected: state.initInjected });
 		if (kind === null) return undefined;
 
+		// Re-assert after the read-only widget so the marker stays directly below it.
+		ctx.ui.setWidget(WIDGET_KEY, [MARKER_LINE], WIDGET_OPTIONS);
+
 		if (kind === "init") {
-			state = markedInit(state);
+			state = markedInit();
 			pi.appendEntry(STATE_CUSTOM_TYPE, state);
 		}
 		return {
@@ -92,7 +98,7 @@ export default function codeBaseTools(pi: ExtensionAPI): void {
 			state = toggled(state);
 			globalOn = state.on;
 			pi.appendEntry(STATE_CUSTOM_TYPE, state);
-			ctx.ui.setStatus(STATUS_KEY, statusText(state.on));
+			ctx.ui.setWidget(WIDGET_KEY, state.on ? [MARKER_LINE] : undefined, WIDGET_OPTIONS);
 			ctx.ui.notify(`codeBaseTools ${state.on ? "on" : "off"}`, "info");
 		},
 	});

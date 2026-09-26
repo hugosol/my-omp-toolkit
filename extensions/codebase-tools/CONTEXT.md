@@ -33,6 +33,11 @@ A hidden message the extension adds to the conversation. It is recorded in sessi
 history, replayed on resume, and read by the model as a developer-role instruction.
 _Avoid_: system prompt, ephemeral context
 
+**Marker**:
+The one-line `◈ codeBaseTools` widget shown while the toggle is on, placed in the
+above-editor area after the read-only widget so it sits directly below it.
+_Avoid_: status line, badge, footer
+
 **Session state**:
 The non-LLM record holding whether the toggle is on and whether init has been
 injected, so resume can restore both without re-reading the conversation.

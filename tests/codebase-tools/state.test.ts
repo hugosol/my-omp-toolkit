@@ -7,7 +7,6 @@ import {
 	markedInit,
 	parseState,
 	readState,
-	statusText,
 	toggled,
 } from "../../extensions/codebase-tools/state";
 
@@ -49,19 +48,12 @@ describe("transitions", () => {
 	});
 
 	test("markedInit turns on and marks init", () => {
-		expect(markedInit({ on: false, initInjected: false })).toEqual({ on: true, initInjected: true });
+		expect(markedInit()).toEqual({ on: true, initInjected: true });
 	});
 
 	test("injection decision", () => {
 		expect(injectionFor({ on: false, initInjected: false })).toBeNull();
 		expect(injectionFor({ on: true, initInjected: false })).toBe("init");
 		expect(injectionFor({ on: true, initInjected: true })).toBe("reminder");
-	});
-});
-
-describe("statusText", () => {
-	test("marker only while on", () => {
-		expect(statusText(true)).toBe("◈ codeBaseTools");
-		expect(statusText(false)).toBeUndefined();
 	});
 });

@@ -5,10 +5,11 @@ import { INIT_MESSAGE_TYPE, REMINDER_MESSAGE_TYPE, STATE_CUSTOM_TYPE } from "../
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 type InjectionResult = { message?: { customType?: string; content?: string; display?: boolean; attribution?: string } };
+type WidgetCall = { key: string; content: unknown; placement: string | undefined };
 
 interface Harness {
 	appended: Array<{ customType: string; data: unknown }>;
-	status: Array<{ key: string; text: string | undefined }>;
+	widgets: WidgetCall[];
 	notices: string[];
 	fire<T = unknown>(event: string, payload?: unknown): Promise<T>;
 	toggle(): Promise<void>;
@@ -18,7 +19,7 @@ function harness(entries: unknown[] = [], kind: "main" | "sub" = "main"): Harnes
 	const handlers: Record<string, Handler> = {};
 	const commands: Record<string, { handler: (args: string, ctx: unknown) => unknown }> = {};
 	const appended: Array<{ customType: string; data: unknown }> = [];
-	const status: Array<{ key: string; text: string | undefined }> = [];
+	const widgets: WidgetCall[] = [];
 	const notices: string[] = [];
 
 	const ctx = {
@@ -32,8 +33,8 @@ function harness(entries: unknown[] = [], kind: "main" | "sub" = "main"): Harnes
 		hasUI: true,
 		mode: "tui",
 		ui: {
-			setStatus: (key: string, text: string | undefined) => {
-				status.push({ key, text });
+			setWidget: (key: string, content: unknown, options?: { placement?: string }) => {
+				widgets.push({ key, content, placement: options?.placement });
 			},
 			notify: (message: string) => {
 				notices.push(message);
@@ -58,7 +59,7 @@ function harness(entries: unknown[] = [], kind: "main" | "sub" = "main"): Harnes
 
 	return {
 		appended,
-		status,
+		widgets,
 		notices,
 		async fire<T = unknown>(event: string, payload: unknown = {}) {
 			const handler = handlers[event];
@@ -76,6 +77,8 @@ function harness(entries: unknown[] = [], kind: "main" | "sub" = "main"): Harnes
 /** One fixture shape shared by every persistence test, so type and data stay in lockstep. */
 const stateEntry = (data: unknown) => ({ type: "custom", customType: STATE_CUSTOM_TYPE, data });
 
+const markerWidget = { key: "codebase-tools", content: ["◈ codeBaseTools"], placement: "aboveEditor" };
+
 beforeEach(() => {
 	__resetCodebaseToolsForTests();
 });
@@ -85,24 +88,25 @@ describe("codeBaseTools extension", () => {
 		expect(name).toBe("codeBaseTools");
 	});
 
-	test("starts off: no injection, status cleared on session_start", async () => {
+	test("starts off: no injection, no marker", async () => {
 		const h = harness();
 		await h.fire("session_start", { type: "session_start" });
-		expect(h.status[h.status.length - 1]).toEqual({ key: "codebase-tools", text: undefined });
+		expect(h.widgets).toEqual([]);
 		expect(await h.fire("before_agent_start")).toBeUndefined();
 	});
 
-	test("/codebase-tools toggles on, shows the marker, persists state", async () => {
+	test("/codebase-tools toggles on, shows the marker above the editor, persists state", async () => {
 		const h = harness();
 		await h.toggle();
 		expect(h.appended).toEqual([{ customType: STATE_CUSTOM_TYPE, data: { on: true, initInjected: false } }]);
-		expect(h.status[h.status.length - 1]).toEqual({ key: "codebase-tools", text: "◈ codeBaseTools" });
+		expect(h.widgets[h.widgets.length - 1]).toEqual(markerWidget);
 		expect(h.notices).toEqual(["codeBaseTools on"]);
 	});
 
-	test("first enabled turn injects init once, then reminder", async () => {
+	test("first enabled turn injects init once, then reminder, re-asserting the marker", async () => {
 		const h = harness();
 		await h.toggle();
+		const afterToggle = h.widgets.length;
 
 		const first = await h.fire<InjectionResult>("before_agent_start");
 		expect(first.message?.customType).toBe(INIT_MESSAGE_TYPE);
@@ -113,12 +117,16 @@ describe("codeBaseTools extension", () => {
 			customType: STATE_CUSTOM_TYPE,
 			data: { on: true, initInjected: true },
 		});
+		expect(h.widgets.length).toBe(afterToggle + 1);
+		expect(h.widgets[h.widgets.length - 1]).toEqual(markerWidget);
 
 		const second = await h.fire<InjectionResult>("before_agent_start");
 		expect(second.message?.customType).toBe(REMINDER_MESSAGE_TYPE);
+		expect(h.widgets.length).toBe(afterToggle + 2);
+		expect(h.widgets[h.widgets.length - 1]).toEqual(markerWidget);
 	});
 
-	test("off stops injection and never resets init", async () => {
+	test("off stops injection, clears the marker, and never resets init", async () => {
 		const h = harness();
 		await h.toggle();
 		await h.fire("before_agent_start");
@@ -128,7 +136,10 @@ describe("codeBaseTools extension", () => {
 			customType: STATE_CUSTOM_TYPE,
 			data: { on: false, initInjected: true },
 		});
-		expect(h.status[h.status.length - 1]).toEqual({ key: "codebase-tools", text: undefined });
+		const cleared = h.widgets[h.widgets.length - 1];
+		expect(cleared.key).toBe("codebase-tools");
+		expect(cleared.placement).toBe("aboveEditor");
+		expect(cleared.content).toBeUndefined();
 		expect(await h.fire("before_agent_start")).toBeUndefined();
 	});
 
@@ -143,13 +154,14 @@ describe("codeBaseTools extension", () => {
 		expect(result.message?.customType).toBe(REMINDER_MESSAGE_TYPE);
 	});
 
-	test("resume restores on + initInjected from the branch", async () => {
+	test("resume restores on + initInjected; marker appears on the first turn", async () => {
 		const h = harness([stateEntry({ on: true, initInjected: true })]);
 		await h.fire("session_start", { type: "session_start" });
-		expect(h.status[h.status.length - 1]).toEqual({ key: "codebase-tools", text: "◈ codeBaseTools" });
+		expect(h.widgets).toEqual([]);
 
 		const result = await h.fire<InjectionResult>("before_agent_start");
 		expect(result.message?.customType).toBe(REMINDER_MESSAGE_TYPE);
+		expect(h.widgets[h.widgets.length - 1]).toEqual(markerWidget);
 	});
 
 	test("resume of an un-initialized on state injects init", async () => {

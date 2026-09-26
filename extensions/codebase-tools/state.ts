@@ -10,6 +10,9 @@ export const STATE_CUSTOM_TYPE = "codebase-tools:state";
 export const INIT_MESSAGE_TYPE = "codebase-tools:init";
 export const REMINDER_MESSAGE_TYPE = "codebase-tools:reminder";
 
+/** One-line UI marker shown while the toggle is on; `setWidget(..., undefined)` clears it. */
+export const MARKER_LINE = "◈ codeBaseTools";
+
 export interface CodebaseToolsState {
 	/** Whether injection is currently on for this session. */
 	on: boolean;
@@ -53,7 +56,7 @@ export function toggled(state: CodebaseToolsState): CodebaseToolsState {
 	return { on: !state.on, initInjected: state.initInjected };
 }
 
-export function markedInit(state: CodebaseToolsState): CodebaseToolsState {
+export function markedInit(): CodebaseToolsState {
 	return { on: true, initInjected: true };
 }
 
@@ -61,8 +64,4 @@ export function markedInit(state: CodebaseToolsState): CodebaseToolsState {
 export function injectionFor(state: CodebaseToolsState): InjectionKind | null {
 	if (!state.on) return null;
 	return state.initInjected ? "reminder" : "init";
-}
-
-export function statusText(on: boolean): string | undefined {
-	return on ? "◈ codeBaseTools" : undefined;
 }

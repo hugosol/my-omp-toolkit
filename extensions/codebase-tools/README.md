@@ -13,6 +13,7 @@
 
 - 两条消息都是 `display:false`、`attribution:"agent"`，经 `before_agent_start` 注入，落在当轮 user prompt 之后；会写进会话历史并在 resume 时重放。
 - `reminder` 只调用 init 定义的 `【codeBaseTools 路由】` token，不重复规则表（单一真相源）。
+- 开启时在编辑器上方显示一行 `◈ codeBaseTools` 标记（`aboveEditor` widget），排在 read-only 框下方；每个启用轮重挂一次以保持顺序，关闭时清除。
 - off 只停止注入：不清理历史、不注入取消消息。
 - 状态 `{on, initInjected}` 存在非 LLM 的 `codebase-tools:state` entry；`session_start` 与 `session_switch` 自动恢复。
 - 子代理继承主会话开关（模块级共享），每个会话独立 init。
@@ -36,12 +37,20 @@
 ## 文件
 
 ```text
-index.ts              工厂：命令 / 状态标记 / 事件钩子
-state.ts              纯逻辑：状态解析、注入决策
+index.ts              工厂：命令 / aboveEditor 标记 / 事件钩子
+state.ts              纯逻辑：状态解析、注入决策、标记常量
 prompts.ts            .md 文本导入
 prompts/init.md       完整路由规则（唯一真相源）
 prompts/reminder.md   一行指针
 ```
+
+## 与 read-only 的关系
+
+两者完全独立加载、互不 import：
+
+- 命令、widget key、注入消息 customType、session entry customType 都不同；
+- 两者都只在 `before_agent_start` 返回隐藏 `message`，**都不改 system prompt**，消息由 runner 聚合并存；
+- 标记与 read-only 框同在 `aboveEditor` 区，顺序按插入顺序；`/readonly` 刚切换后到下一轮之间可能短暂反转。
 
 ## 测试
 
@@ -50,7 +59,7 @@ bun test tests/codebase-tools/
 bun tests/codebase-tools/smoke-omp.ts
 ```
 
-`smoke-omp.ts` 用已安装的 omp 真 loader/runner 跑：装载、开关、init→reminder、resume 恢复、子代理继承、off 静默。
+`smoke-omp.ts` 用已安装的 omp 真 loader/runner 跑：装载、开关、标记、init→reminder、resume 恢复、子代理继承、off 静默。
 
 ## 已知限制
 
