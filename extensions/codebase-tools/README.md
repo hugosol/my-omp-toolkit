@@ -16,8 +16,19 @@
 - 开启时在编辑器上方显示一行 `◈ codeBaseTools` 标记（`aboveEditor` widget）；每个启用轮重新设置标记，关闭时清除。
 - off 只停止注入：不清理历史、不注入取消消息。
 - 状态 `{on, initInjected}` 存在非 LLM 的 `codebase-tools:state` entry；`session_start` 与 `session_switch` 自动恢复。
-- 子代理继承主会话开关（模块级共享），每个会话独立 init。
 - 扩展不探测索引或工具能力；注入决策只依据开关状态和 `initInjected`。
+
+## 子代理注入规则
+
+子代理每轮在 `before_agent_start` 读取模块级共享开关 `globalOn`，而不是用自己的 `state.on` 判断是否注入。主会话切换开关或恢复会话时会更新该共享值；各子代理会话独立保存自己的 `initInjected`。
+
+| 共享开关 | 子代理的 `initInjected` | 当前轮注入 |
+| --- | --- | --- |
+| off | 任意 | 不注入 |
+| on | false | `prompts/init.md` |
+| on | true | `prompts/reminder.md` |
+
+因此，开关保持 on 时，子代理首次启用轮注入 init，此后**每个启用轮**注入 reminder；切到 off 时停止注入，但不清除该子代理的 `initInjected`。再次切到 on 后，已注入过 init 的子代理继续注入 reminder，尚未注入过的子代理则先注入 init。共享开关是模块级变量，不按子代理的 `parentId` 分别维护。
 
 ## 安装
 
