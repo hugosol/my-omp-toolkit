@@ -13,7 +13,7 @@
 
 - 两条消息都是 `display:false`、`attribution:"agent"`，经 `before_agent_start` 注入，落在当轮 user prompt 之后；会写进会话历史并在 resume 时重放。
 - 两个 `.md` 文件独立导入；扩展只按注入时机选择其中一个，不建立两份提示词之间的依赖关系。
-- 开启时在编辑器上方显示一行 `◈ codeBaseTools` 标记（`aboveEditor` widget），排在 read-only 框下方；每个启用轮重挂一次以保持顺序，关闭时清除。
+- 开启时在编辑器上方显示一行 `◈ codeBaseTools` 标记（`aboveEditor` widget）；每个启用轮重新设置标记，关闭时清除。
 - off 只停止注入：不清理历史、不注入取消消息。
 - 状态 `{on, initInjected}` 存在非 LLM 的 `codebase-tools:state` entry；`session_start` 与 `session_switch` 自动恢复。
 - 子代理继承主会话开关（模块级共享），每个会话独立 init。
@@ -43,14 +43,6 @@ prompts.ts            .md 文本导入
 prompts/init.md       首次启用轮注入的提示词
 prompts/reminder.md   后续启用轮注入的提示词
 ```
-
-## 与 read-only 的关系
-
-两者完全独立加载、互不 import：
-
-- 命令、widget key、注入消息 customType、session entry customType 都不同；
-- 两者都只在 `before_agent_start` 返回隐藏 `message`，**都不改 system prompt**，消息由 runner 聚合并存；
-- 标记与 read-only 框同在 `aboveEditor` 区，顺序按插入顺序；`/readonly` 刚切换后到下一轮之间可能短暂反转。
 
 ## 测试
 
