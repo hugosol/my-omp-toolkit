@@ -1,6 +1,6 @@
 # codeBaseTools
 
-独立的 OMP 扩展：让 agent 在理解代码库时优先走 codebase-memory-mcp 的图工具与 LSP，把 `grep` 留给字面/逐行搜索。
+这是一个为促使 agent 主动调用 codebase-memory-mcp 相关工具而开发的独立 OMP 扩展。它按会话开关与注入时机，将目录中的 Markdown 提示词作为隐藏消息加入对话；提示词文本请直接查看对应的 `.md` 文件。
 
 ## 行为
 
@@ -8,16 +8,16 @@
 
 | 时机 | 注入 | 形态 |
 | --- | --- | --- |
-| 每个会话首次启用轮 | **init**：完整路由规则（`prompts/init.md`） | 隐藏持久化 developer 消息 |
-| 之后每个启用轮 | **reminder**：一行指针（`prompts/reminder.md`） | 隐藏持久化 developer 消息 |
+| 每个会话首次启用轮 | **init**：注入 `prompts/init.md` 的提示词 | 隐藏持久化 developer 消息 |
+| 之后每个启用轮 | **reminder**：注入 `prompts/reminder.md` 的提示词 | 隐藏持久化 developer 消息 |
 
 - 两条消息都是 `display:false`、`attribution:"agent"`，经 `before_agent_start` 注入，落在当轮 user prompt 之后；会写进会话历史并在 resume 时重放。
-- `reminder` 只调用 init 定义的 `【codeBaseTools 路由】` token，不重复规则表（单一真相源）。
+- 两个 `.md` 文件独立导入；扩展只按注入时机选择其中一个，不建立两份提示词之间的依赖关系。
 - 开启时在编辑器上方显示一行 `◈ codeBaseTools` 标记（`aboveEditor` widget），排在 read-only 框下方；每个启用轮重挂一次以保持顺序，关闭时清除。
 - off 只停止注入：不清理历史、不注入取消消息。
 - 状态 `{on, initInjected}` 存在非 LLM 的 `codebase-tools:state` entry；`session_start` 与 `session_switch` 自动恢复。
 - 子代理继承主会话开关（模块级共享），每个会话独立 init。
-- 不探测索引：init 文案让 agent 自查 `list_projects` / `index_status` / `check_index_coverage`。
+- 扩展不探测索引或工具能力；注入决策只依据开关状态和 `initInjected`。
 
 ## 安装
 
@@ -28,7 +28,7 @@
 <project>/.omp/extensions/codebase-tools/
 ```
 
-前置能力：会话里应存在 codebase-memory-mcp 与 `lsp` 工具。扩展**不做能力探测**，统一注入同一份文案——请只在具备这些工具时开启。
+扩展不校验会话中的工具是否满足提示词要求；启用前请自行查看 `prompts/init.md` 和 `prompts/reminder.md`。
 
 ## 配置
 
@@ -40,8 +40,8 @@
 index.ts              工厂：命令 / aboveEditor 标记 / 事件钩子
 state.ts              纯逻辑：状态解析、注入决策、标记常量
 prompts.ts            .md 文本导入
-prompts/init.md       完整路由规则（唯一真相源）
-prompts/reminder.md   一行指针
+prompts/init.md       首次启用轮注入的提示词
+prompts/reminder.md   后续启用轮注入的提示词
 ```
 
 ## 与 read-only 的关系
@@ -63,6 +63,5 @@ bun tests/codebase-tools/smoke-omp.ts
 
 ## 已知限制
 
-- reminder 每轮持久化，历史按会话线性增加一条短消息；压缩会折叠。
-- 子代理定义里没有 `lsp` 时仍会收到含 LSP 的文案（按设计不切分）。
+- 子代理使用同一套提示词文件，扩展不会按其可用工具裁剪注入内容。
 - 文案是编译期常量：改 `.md` 后需重启 omp 生效。
