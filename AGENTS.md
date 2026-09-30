@@ -10,4 +10,4 @@ Decision tickets: `open` / `claimed` / `resolved`; implementation tickets: `read
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Multi-context: `GLOSSARY-MAP.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
