@@ -44,6 +44,20 @@ _Avoid_: reset (alone), refresh (alone)
 A user-held credit that refreshes both Codex windows early and moves the weekly reset time; for measurement it invalidates the baseline exactly like a rollover.
 _Avoid_: reset (alone)
 
+### Observation cadence
+
+**Agent run**:
+One user prompt and all the agent work it triggers before control returns to the user; a run can contain several turns. (The README's "回合" means this, not a turn.)
+_Avoid_: turn, 回合（单独使用时）
+
+**Turn**:
+One assistant response plus the tool calls and tool results it triggers.
+_Avoid_: round, 轮
+
+**Assistant message**:
+A single model response — one provider request carrying that request's own usage figures; a turn has exactly one assistant message.
+_Avoid_: reply, response（单独使用时）, 回复
+
 ### Measurement
 
 **Paired reading**:

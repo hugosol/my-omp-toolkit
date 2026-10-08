@@ -320,7 +320,51 @@ describe("model-cost Codex usage lifecycle", () => {
     expect(last.join("\n")).toContain("55.0%");
   });
 
-  test("message_end does not start an active usage request", async () => {
+  test("assistant message_end refreshes Codex usage while the cache is stale", async () => {
+    let calls = 0;
+    installFakeCodexModules({
+      fetchUsage: async () => {
+        calls += 1;
+        return weeklyReport();
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const { handlers } = mountExtension();
+    const { ctx, widgetCalls } = codexContext();
+    const assistant = { message: { role: "assistant", usage: { input: 1, cacheRead: 0, output: 0 } } };
+
+    // No session/agent start: the Codex cache is empty, so the first assistant
+    // message is allowed to refresh.
+    fireWithPayload(handlers, "message_end", assistant, ctx);
+    await flushPromises();
+
+    expect(calls).toBe(1);
+    const last = widgetCalls[widgetCalls.length - 1] ?? [];
+    expect(last.join("\n")).toContain("34.0%");
+  });
+
+  test("assistant message_end is throttled by the 30s Codex cache TTL", async () => {
+    let calls = 0;
+    installFakeCodexModules({
+      fetchUsage: async () => {
+        calls += 1;
+        return weeklyReport();
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const { handlers } = mountExtension();
+    const { ctx } = codexContext();
+    const assistant = { message: { role: "assistant", usage: { input: 1, cacheRead: 0, output: 0 } } };
+
+    fireWithPayload(handlers, "message_end", assistant, ctx);
+    await flushPromises();
+    fireWithPayload(handlers, "message_end", assistant, ctx);
+    await flushPromises();
+
+    expect(calls).toBe(1);
+  });
+
+  test("toolResult message_end never refreshes Codex usage", async () => {
     let calls = 0;
     installFakeCodexModules({
       fetchUsage: async () => {
@@ -332,10 +376,37 @@ describe("model-cost Codex usage lifecycle", () => {
     const { handlers } = mountExtension();
     const { ctx } = codexContext();
 
-    await fire(handlers, "session_start", ctx);
-    const before = calls;
-    await fire(handlers, "message_end", { message: { usage: { input: 1, cacheRead: 0, output: 0 } } }, ctx);
-    expect(calls).toBe(before);
+    fireWithPayload(
+      handlers,
+      "message_end",
+      { message: { role: "toolResult", usage: { input: 1, cacheRead: 0, output: 0 } } },
+      ctx,
+    );
+    await flushPromises();
+
+    expect(calls).toBe(0);
+  });
+
+  test("assistant message_end during an in-flight refresh does not start a second request", async () => {
+    let calls = 0;
+    const { promise: pending, resolve: resolveFetch } = Promise.withResolvers<unknown>();
+    installFakeCodexModules({
+      fetchUsage: () => {
+        calls += 1;
+        return pending;
+      },
+    });
+    process.env.PI_PROXY = "http://generic-proxy";
+    const { handlers } = mountExtension();
+    const { ctx } = codexContext();
+    const assistant = { message: { role: "assistant", usage: { input: 1, cacheRead: 0, output: 0 } } };
+
+    fireWithPayload(handlers, "message_end", assistant, ctx);
+    fireWithPayload(handlers, "message_end", assistant, ctx);
+    resolveFetch(weeklyReport());
+    await flushPromises();
+
+    expect(calls).toBe(1);
   });
 
   test("active failure clears API data but preserves header data", async () => {

@@ -692,8 +692,22 @@ export default function modelCost(pi: ExtensionAPI): void {
     refresh(state, daily, pi, ctx);
   });
 
-  // ── Message end — charge the completed message against the anchored tier ──
-  pi.on("message_end", (event) => {
+  // ── Message end — charge the completed message and keep Codex usage fresh ──
+  pi.on("message_end", (event, ctx) => {
+    // Codex: each assistant message is one model response (one turn) and the
+    // host emits one `message_end` per response, including the ones that only
+    // request tools. Refresh the 5h/7d usage in step with the context bar,
+    // throttled by the same 30s TTL as the prefetch cache; `agent_end` still
+    // refreshes unconditionally. Fire-and-forget, so a network call never
+    // stalls the agent loop.
+    if (
+      isOpenAICodexModel(ctx.model) &&
+      event.message.role === "assistant" &&
+      !isCacheFresh(balanceCache.codex)
+    ) {
+      void refreshChatGPTUsage(ctx);
+    }
+
     const usage = getMessageUsage(event.message);
     if (!usage) return;
     addMessageCost(state.turnCost, usage);
